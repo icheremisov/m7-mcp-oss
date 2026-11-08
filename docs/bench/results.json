@@ -1,0 +1,376 @@
+{
+  "date": "2026-11-08T14:40:11.638Z",
+  "runs": 2,
+  "results": [
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.0036609960000000006,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 7494
+    },
+    {
+      "model": "opencode-go/claude-haiku-5-5",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.002690295,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 5281
+    },
+    {
+      "model": "opencode-go/minimax-m3.1-flash",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.0031686150000000005,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 13114
+    },
+    {
+      "model": "opencode-go/glm-5.3-flash",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.0023684400000000003,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 7394
+    },
+    {
+      "model": "opencode-go/glm-5.3",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.04076792,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 12839
+    },
+    {
+      "model": "opencode-go/qwen3.8-flash",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.002056394,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 6188
+    },
+    {
+      "model": "opencode-go/mimo-v2.6-flash",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.0022752016000000003,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 14971
+    },
+    {
+      "model": "opencode-go/kimi-k2.7-code",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.017228019999999997,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 10858
+    },
+    {
+      "model": "opencode-go/gemini-4-argon",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.06298600000000001,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 15531
+    },
+    {
+      "model": "opencode-go/kimi-k3.1-pro",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.052897999999999994,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 19386
+    },
+    {
+      "model": "opencode-go/qwen3.8-max",
+      "calls": 6,
+      "failures": 0,
+      "json": 6,
+      "schema": 6,
+      "correct": 6,
+      "cost": 0.03567574999999999,
+      "errors": [],
+      "perTask": {
+        "architect": {
+          "correct": 2,
+          "runs": 2
+        },
+        "expert": {
+          "correct": 2,
+          "runs": 2
+        },
+        "critic": {
+          "correct": 2,
+          "runs": 2
+        }
+      },
+      "medianMs": 24275
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "calls": 1,
+      "failures": 1,
+      "json": 0,
+      "schema": 0,
+      "correct": 0,
+      "cost": 0,
+      "errors": [
+        "architect: opencode provider error (opencode/deepseek-v4.1-flash-free): AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subs"
+      ],
+      "perTask": {
+        "architect": {
+          "correct": 0,
+          "runs": 1
+        }
+      },
+      "medianMs": null
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "calls": 1,
+      "failures": 1,
+      "json": 0,
+      "schema": 0,
+      "correct": 0,
+      "cost": 0,
+      "errors": [
+        "architect: opencode provider error (opencode/glm-5.3-flash-free): AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe "
+      ],
+      "perTask": {
+        "architect": {
+          "correct": 0,
+          "runs": 1
+        }
+      },
+      "medianMs": null
+    },
+    {
+      "model": "opencode/big-pickle",
+      "calls": 1,
+      "failures": 1,
+      "json": 0,
+      "schema": 0,
+      "correct": 0,
+      "cost": 0,
+      "errors": [
+        "architect: opencode provider error (opencode/big-pickle): AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenC"
+      ],
+      "perTask": {
+        "architect": {
+          "correct": 0,
+          "runs": 1
+        }
+      },
+      "medianMs": null
+    },
+    {
+      "model": "opencode/beam-free",
+      "calls": 1,
+      "failures": 1,
+      "json": 0,
+      "schema": 0,
+      "correct": 0,
+      "cost": 0,
+      "errors": [
+        "architect: opencode provider error (opencode/beam-free): AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCo"
+      ],
+      "perTask": {
+        "architect": {
+          "correct": 0,
+          "runs": 1
+        }
+      },
+      "medianMs": null
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "calls": 1,
+      "failures": 1,
+      "json": 0,
+      "schema": 0,
+      "correct": 0,
+      "cost": 0,
+      "errors": [
+        "architect: opencode provider error (opencode/flint-40b-free): AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to O"
+      ],
+      "perTask": {
+        "architect": {
+          "correct": 0,
+          "runs": 1
+        }
+      },
+      "medianMs": null
+    }
+  ]
+}

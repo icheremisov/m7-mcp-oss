@@ -24,4 +24,4 @@
 ## Проверка
 - [x] npm run build, npm test
 - [x] живой прогон MCP (tools/list, analyze_task, hive на free)
-- [ ] мини-бенч моделей → пресеты
+- [x] мини-бенч моделей → пресеты
