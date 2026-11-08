@@ -13,7 +13,7 @@
  */
 
 import { execFile } from 'child_process';
-import { mkdirSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import PQueue from 'p-queue';
@@ -47,12 +47,14 @@ let sandbox: { configHome: string; workDir: string } | null = null;
 
 function ensureSandbox(): { configHome: string; workDir: string } {
   if (sandbox && existsSync(sandbox.workDir)) return sandbox;
-  const uid = typeof process.getuid === 'function' ? process.getuid() : 'u';
-  const root = join(tmpdir(), `m7-opencode-${uid}`);
+  // Unpredictable per-process directory (0700, owned by us): a fixed path in a shared /tmp could be
+  // pre-created by another user with a config that re-enables tools.
+  const root = mkdtempSync(join(tmpdir(), 'm7-opencode-'));
   const configHome = join(root, 'config');
   const workDir = join(root, 'work');
   mkdirSync(join(configHome, 'opencode'), { recursive: true, mode: 0o700 });
-  mkdirSync(workDir, { recursive: true, mode: 0o700 });
+  mkdirSync(workDir, { mode: 0o700 });
+  process.once('exit', () => rmSync(root, { recursive: true, force: true }));
   const config = {
     $schema: 'https://opencode.ai/config.json',
     autoupdate: false,
@@ -70,7 +72,7 @@ function ensureSandbox(): { configHome: string; workDir: string } {
       },
     },
   };
-  writeFileSync(join(configHome, 'opencode', 'opencode.json'), JSON.stringify(config, null, 2), { mode: 0o600 });
+  writeFileSync(join(configHome, 'opencode', 'opencode.json'), JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
   sandbox = { configHome, workDir };
   return sandbox;
 }

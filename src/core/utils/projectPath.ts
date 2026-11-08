@@ -15,7 +15,7 @@
  */
 
 import { join, resolve, isAbsolute, sep, parse } from 'path';
-import { existsSync, readdirSync, statSync, mkdirSync, realpathSync } from 'fs';
+import { existsSync, readdirSync, statSync, mkdtempSync, realpathSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { silentLogger as logger } from './logger.js';
@@ -86,10 +86,11 @@ export function assertSafeProjectRoot(dirPath: string): void {
 }
 
 /** Fork: harmless placeholder used instead of the home directory when no project could be resolved. */
+let noProjectDir: string | null = null;
 function noProjectSandbox(): string {
-  const dir = join(tmpdir(), 'm7-no-project');
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  // mkdtemp: unpredictable name, 0700 — a fixed shared-/tmp path could be a planted symlink
+  if (!noProjectDir || !existsSync(noProjectDir)) noProjectDir = mkdtempSync(join(tmpdir(), 'm7-no-project-'));
+  return noProjectDir;
 }
 
 function isM7InstallationDirectory(dirPath: string): boolean {
