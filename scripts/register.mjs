@@ -2,7 +2,8 @@
 /**
  * Register the M7 MCP server in one agent without touching anything else.
  *
- *   node scripts/register.mjs claude|cursor|codex|opencode [--dry-run] [--name m7] [--force]
+ *   node scripts/register.mjs claude|cursor|codex|opencode|dsh [--dry-run] [--name m7] [--force]
+ *   (dsh = DeepSeek Harness desktop profile, ~/.dsh/profiles/desktop/cordis.patch.yml)
  *
  * - Adds exactly one server entry; other servers and settings are preserved.
  * - Writes a timestamped backup next to the config before changing it.
@@ -26,8 +27,8 @@ const force = args.includes('--force');
 const nameIdx = args.indexOf('--name');
 const NAME = nameIdx >= 0 ? args[nameIdx + 1] : 'm7';
 
-if (!['claude', 'cursor', 'codex', 'opencode'].includes(target)) {
-  console.error('usage: node scripts/register.mjs claude|cursor|codex|opencode [--dry-run] [--name m7] [--force]');
+if (!['claude', 'cursor', 'codex', 'opencode', 'dsh'].includes(target)) {
+  console.error('usage: node scripts/register.mjs claude|cursor|codex|opencode|dsh [--dry-run] [--name m7] [--force]');
   process.exit(2);
 }
 if (!existsSync(ENTRY)) {
@@ -55,24 +56,50 @@ function backupAndWrite(file, content) {
   console.log(`✅ ${file}: added "${NAME}"`);
 }
 
-/** Minimal JSONC → JSON: strips comments and trailing commas outside strings. */
+/**
+ * Minimal JSONC → JSON: strips comments and trailing commas, only outside strings
+ * (string contents such as ",}" are kept verbatim).
+ */
 function parseJsonc(text) {
-  let out = '';
-  let inStr = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    const n = text[i + 1];
-    if (inStr) {
+  const stripComments = src => {
+    let out = '';
+    let inStr = false;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      const n = src[i + 1];
+      if (inStr) {
+        out += c;
+        if (c === '\\') { out += n ?? ''; i++; } else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; out += c; continue; }
+      if (c === '/' && n === '/') { while (i < src.length && src[i] !== '\n') i++; out += '\n'; continue; }
+      if (c === '/' && n === '*') { i += 2; while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++; i++; continue; }
       out += c;
-      if (c === '\\') { out += n ?? ''; i++; } else if (c === '"') inStr = false;
-      continue;
     }
-    if (c === '"') { inStr = true; out += c; continue; }
-    if (c === '/' && n === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
-    if (c === '/' && n === '*') { i += 2; while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++; i++; continue; }
-    out += c;
-  }
-  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+    return out;
+  };
+  const stripTrailingCommas = src => {
+    let out = '';
+    let inStr = false;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (inStr) {
+        out += c;
+        if (c === '\\') { out += src[i + 1] ?? ''; i++; } else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') { inStr = true; out += c; continue; }
+      if (c === ',') {
+        let j = i + 1;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        if (src[j] === '}' || src[j] === ']') continue;
+      }
+      out += c;
+    }
+    return out;
+  };
+  return JSON.parse(stripTrailingCommas(stripComments(text)));
 }
 
 function hasComments(text) {
@@ -141,6 +168,33 @@ switch (target) {
     }
     config.mcp[NAME] = { type: 'local', command: [NODE, ENTRY], enabled: true };
     backupAndWrite(file, `${JSON.stringify(config, null, 2)}\n`);
+    break;
+  }
+  case 'dsh': {
+    // DeepSeek Harness: plugin list in the desktop profile; MCP servers use @deepseek-ai/dsh-mcp-client
+    const file = join(homedir(), '.dsh', 'profiles', 'desktop', 'cordis.patch.yml');
+    if (!existsSync(file)) {
+      console.error(`❌ ${file} not found — open DeepSeek Harness once first`);
+      process.exit(1);
+    }
+    const text = readFileSync(file, 'utf-8');
+    if (new RegExp(`^- id: mcp-${NAME}\\s*$`, 'm').test(text) || new RegExp(`serverName: ${NAME}\\s*$`, 'm').test(text)) {
+      console.error(`❌ ${file} already has an MCP server "${NAME}" — edit it by hand`);
+      process.exit(1);
+    }
+    const block = [
+      `# M7 MCP (secure fork): ${ROOT}`,
+      `- id: mcp-${NAME}`,
+      '  name: "@deepseek-ai/dsh-mcp-client"',
+      '  config:',
+      `    serverName: ${NAME}`,
+      '    transport: stdio',
+      `    command: ${JSON.stringify(NODE)}`,
+      `    args: [ ${JSON.stringify(ENTRY)} ]`,
+      '    toolCallTimeoutMs: 900000',
+      '',
+    ].join('\n');
+    backupAndWrite(file, text.replace(/\n*$/, '\n') + block);
     break;
   }
 }

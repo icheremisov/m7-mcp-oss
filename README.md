@@ -17,7 +17,7 @@ What is different from upstream:
   Models per role: presets `free` / `cheap` / `strong`, env overrides, or per call from the dialog
   (`mcp_m7_hive_coordinator` → `preset`, `models`; list with `mcp_m7_models`).
 - Visualizer bound to `127.0.0.1` with origin checks; mesh file exchange hardened; dynamic extension loader removed.
-- `install.sh` only builds; `scripts/register.mjs` adds one entry to Claude Code / Cursor / Codex / opencode
+- `install.sh` only builds; `scripts/register.mjs` adds one entry to Claude Code / Cursor / Codex / opencode / DeepSeek Harness
   config with a backup and never replaces other servers.
 
 ```bash
