@@ -85,6 +85,16 @@ export function assertSafeProjectRoot(dirPath: string): void {
   }
 }
 
+/** Non-throwing variant: every resolved workspace (Roots, env, cwd) must pass this before use. */
+function isAllowedProjectRoot(dirPath: string): boolean {
+  try {
+    assertSafeProjectRoot(dirPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Fork: harmless placeholder used instead of the home directory when no project could be resolved. */
 let noProjectDir: string | null = null;
 function noProjectSandbox(): string {
@@ -226,17 +236,17 @@ function pickBestWorkspaceCandidate(candidates: string[]): string | null {
     .filter((candidate, index, all) => all.indexOf(candidate) === index);
 
   for (const candidate of normalized) {
-    if (!existsSync(candidate) || isUnsafeFallbackPath(candidate)) continue;
+    if (!existsSync(candidate) || !isAllowedProjectRoot(candidate)) continue;
     if (isValidProjectDirectory(candidate)) return candidate;
   }
 
   for (const candidate of normalized) {
-    if (!existsSync(candidate) || isUnsafeFallbackPath(candidate)) continue;
+    if (!existsSync(candidate) || !isAllowedProjectRoot(candidate)) continue;
     if (isM7InstallationDirectory(candidate)) return candidate;
   }
 
   for (const candidate of normalized) {
-    if (!existsSync(candidate) || isUnsafeFallbackPath(candidate)) continue;
+    if (!existsSync(candidate) || !isAllowedProjectRoot(candidate)) continue;
     return candidate;
   }
 
@@ -245,7 +255,7 @@ function pickBestWorkspaceCandidate(candidates: string[]): string | null {
 
 function resolveCursorWorkspaceFromEnv(): string | null {
   const cursorWorkspace = process.env.CURSOR_WORKSPACE;
-  if (cursorWorkspace && existsSync(cursorWorkspace)) {
+  if (cursorWorkspace && existsSync(cursorWorkspace) && isAllowedProjectRoot(cursorWorkspace)) {
     return cursorWorkspace;
   }
 
@@ -276,7 +286,16 @@ function resolveCursorWorkspaceFromEnv(): string | null {
   return null;
 }
 
+/** Fork: whatever the heuristics pick must pass the root policy, otherwise use the placeholder. */
 function resolveEnvFallbackPath(allowCache: boolean): string {
+  const picked = resolveEnvFallbackPathUnchecked(allowCache);
+  if (isAllowedProjectRoot(picked) || picked === noProjectDir) return picked;
+  logger.warn(`[M7 ProjectPath] ${picked} violates the project root policy (home, filesystem root or outside M7_ALLOWED_ROOTS)`);
+  if (cachedProjectPath === picked) cachedProjectPath = null;
+  return noProjectSandbox();
+}
+
+function resolveEnvFallbackPathUnchecked(allowCache: boolean): string {
   const cursorPath = resolveCursorWorkspaceFromEnv();
   if (cursorPath) {
     if (allowCache) {
@@ -345,6 +364,10 @@ function notifyChange(oldPath: string | null, newPath: string): void {
 }
 
 function applyResolvedWorkspace(workspacePath: string, fromRoots: boolean): string {
+  if (!isAllowedProjectRoot(workspacePath)) {
+    logger.warn(`[M7 ProjectPath] Ignoring workspace outside the project root policy: ${workspacePath}`);
+    return noProjectSandbox();
+  }
   const oldPath = cachedProjectPath;
   cachedProjectPath = resolve(workspacePath);
   resolvedFromRoots = fromRoots;
