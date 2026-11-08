@@ -7,11 +7,9 @@
  * @version 3.7.0
  */
 
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 import { HiveTask, HiveResult } from '../types/task.js';
-import { APIConfig } from '../types/api.js';
+import { completeForRole, ModelOverrides } from '../../llm/index.js';
 import { JournalSystem } from '../../journal/journalSystem.js';
 import { getProjectPath } from '../../core/utils/projectPath.js';
 import { silentLogger as logger } from '../../core/utils/logger.js';
@@ -34,8 +32,7 @@ import {
   getLearningStats
 } from '../intelligence/index.js';
 
-// Synthesizer uses the same model as Architect
-const SYNTHESIZER_MODEL = 'claude-opus-4-6';
+const JSON_ONLY = '\n\nReturn only a JSON object, no prose before or after it.';
 
 /**
  * Dynamic Hive Orchestrator
@@ -43,8 +40,7 @@ const SYNTHESIZER_MODEL = 'claude-opus-4-6';
  * Creates dynamic agent teams and executes them with optimal model selection.
  */
 export class DynamicHiveOrchestrator {
-  private openaiClient: OpenAI;
-  private anthropicClient: Anthropic;
+  private overrides: ModelOverrides;
   private architect: HiveArchitect;
   private modelSelector: ModelSelector;
   private memoryCore: UnifiedMemoryCore | null = null;
@@ -52,24 +48,13 @@ export class DynamicHiveOrchestrator {
   private debateEngine: DebateEngine;  // v7.0: Real LLM debates
   
   constructor(
-    config: APIConfig,
-    journal: JournalSystem
+    journal: JournalSystem,
+    overrides: ModelOverrides = {}
   ) {
-    this.openaiClient = new OpenAI({
-      apiKey: config.openai,
-      maxRetries: 3,
-      timeout: 180000
-    });
-    
-    this.anthropicClient = new Anthropic({
-      apiKey: config.anthropic,
-      maxRetries: 3,
-      timeout: 180000
-    });
-    
-    this.architect = new HiveArchitect(config.anthropic);
-    this.modelSelector = new ModelSelector();
-    this.debateEngine = new DebateEngine(this.openaiClient, this.anthropicClient);  // v7.0
+    this.overrides = overrides;
+    this.architect = new HiveArchitect(overrides);
+    this.modelSelector = new ModelSelector(overrides);
+    this.debateEngine = new DebateEngine(overrides);  // v7.0
     this.journal = journal;
     
     logger.info('[Dynamic Hive] ✅ Initialized with dynamic agent generation');
@@ -229,11 +214,7 @@ export class DynamicHiveOrchestrator {
   }
   
   /**
-   * Execute single agent
-   */
-  /**
-   * Execute single agent with retry-on-empty/truncation.
-   * Attempt 1: 4096 tokens. Attempt 2 (if needed): 8192 tokens.
+   * Execute single agent with one retry on empty/truncated response.
    */
   private async executeAgent(
     agent: DynamicAgent,
@@ -248,29 +229,20 @@ export class DynamicHiveOrchestrator {
     const systemPrompt = this.buildAgentSystemPrompt(agent);
     
     const MAX_ATTEMPTS = 2;
-    const TOKEN_BUDGETS = [4096, 8192];
     
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
-        const maxTokens = TOKEN_BUDGETS[attempt];
-        let content: string;
-        let tokensUsed: number;
-        let costEstimate: number;
-        let stopReason: string;
-        
-        if (modelSelection.provider === 'openai') {
-          const result = await this.callOpenAI(modelSelection.model, systemPrompt, prompt, maxTokens);
-          content = result.content;
-          tokensUsed = result.tokens;
-          costEstimate = result.cost;
-          stopReason = result.finishReason;
-        } else {
-          const result = await this.callAnthropic(modelSelection.model, systemPrompt, prompt, maxTokens);
-          content = result.content;
-          tokensUsed = result.tokens;
-          costEstimate = result.cost;
-          stopReason = result.stopReason;
-        }
+        const result = await completeForRole({
+          role: 'expert',
+          expertIndex: modelSelection.expertIndex,
+          overrides: this.overrides,
+          system: systemPrompt,
+          prompt: prompt + JSON_ONLY
+        });
+        const content = result.text;
+        const tokensUsed = result.tokens.total;
+        const costEstimate = result.cost;
+        const stopReason = result.finishReason;
         
         // Content validation — retry if empty or truncated
         const isEmpty = !content || content.trim().length === 0;
@@ -279,8 +251,7 @@ export class DynamicHiveOrchestrator {
         if ((isEmpty || isTruncated) && attempt < MAX_ATTEMPTS - 1) {
           logger.warn(
             `[Dynamic Hive] ⚠️ ${agent.role} attempt ${attempt + 1}: ` +
-            `${isEmpty ? 'empty response' : `truncated (${stopReason})`}, ` +
-            `retrying with ${TOKEN_BUDGETS[attempt + 1]} tokens...`
+            `${isEmpty ? 'empty response' : `truncated (${stopReason})`}, retrying...`
           );
           continue;
         }
@@ -289,7 +260,7 @@ export class DynamicHiveOrchestrator {
           logger.warn(`[Dynamic Hive] ❌ ${agent.role}: empty response after ${MAX_ATTEMPTS} attempts`);
         }
         if (isTruncated) {
-          logger.warn(`[Dynamic Hive] ⚠️ ${agent.role}: response truncated (${stopReason}) even at ${maxTokens} tokens`);
+          logger.warn(`[Dynamic Hive] ⚠️ ${agent.role}: response truncated (${stopReason}) after ${MAX_ATTEMPTS} attempts`);
         }
         
         const latency = Date.now() - startTime;
@@ -299,8 +270,9 @@ export class DynamicHiveOrchestrator {
         
         return {
           agent,
-          model: modelSelection.model,
+          model: result.model,
           provider: modelSelection.provider,
+          expertIndex: modelSelection.expertIndex,
           proposal: parsed.proposal,
           reasoning: parsed.reasoning,
           confidence: parsed.confidence,
@@ -375,88 +347,6 @@ Format your response as JSON:
     return prompt;
   }
   
-  private async callOpenAI(
-    model: string,
-    systemPrompt: string,
-    userPrompt: string,
-    maxTokens: number = 4096
-  ): Promise<{ content: string; tokens: number; cost: number; finishReason: string }> {
-    
-    const isGPT5 = model.startsWith('gpt-5');
-    
-    const params: any = {
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      response_format: { type: 'json_object' }
-    };
-    
-    if (isGPT5) {
-      params.max_completion_tokens = maxTokens;
-    } else {
-      params.max_tokens = maxTokens;
-      params.temperature = 0.1;
-    }
-    
-    const response = await this.openaiClient.chat.completions.create(params);
-    const tokens = response.usage?.total_tokens || 0;
-    
-    // Cost calculation (April 2026 — blended in/out average)
-    const rates: Record<string, number> = {
-      'gpt-5.5': 0.0175 / 1000,
-      'gpt-5.5-2026-04-23': 0.0175 / 1000,
-      'gpt-5.2': 0.0078 / 1000,
-      'gpt-5.1': 0.0056 / 1000,
-      'gpt-4.1': 0.005 / 1000,
-      'gpt-4.1-mini': 0.001 / 1000,
-      'gpt-4.1-nano': 0.00025 / 1000
-    };
-    const cost = (rates[model] || 0.010 / 1000) * tokens;
-    
-    return {
-      content: response.choices[0].message.content || '',
-      tokens,
-      cost,
-      finishReason: response.choices[0].finish_reason || 'unknown'
-    };
-  }
-  
-  private async callAnthropic(
-    model: string,
-    systemPrompt: string,
-    userPrompt: string,
-    maxTokens: number = 4096
-  ): Promise<{ content: string; tokens: number; cost: number; stopReason: string }> {
-    
-    const response = await this.anthropicClient.messages.create({
-      model,
-      max_tokens: maxTokens,
-      temperature: 0.1,
-      system: systemPrompt,
-      messages: [
-        { role: 'user', content: userPrompt }
-      ]
-    });
-    
-    const tokens = response.usage.input_tokens + response.usage.output_tokens;
-    const content = response.content[0].type === 'text' ? response.content[0].text : '';
-    
-    // Cost calculation (April 2026 — blended in/out average)
-    const rates: Record<string, number> = {
-      'claude-opus-4-7': 0.015 / 1000,
-      'claude-opus-4-6': 0.015 / 1000,
-      'claude-opus-4-5-20251101': 0.015 / 1000,
-      'claude-sonnet-4-6': 0.009 / 1000,
-      'claude-sonnet-4-5-20250929': 0.009 / 1000,
-      'claude-haiku-4-5-20251001': 0.003 / 1000
-    };
-    const cost = (rates[model] || 0.009 / 1000) * tokens;
-    
-    return { content, tokens, cost, stopReason: response.stop_reason || 'unknown' };
-  }
-  
   private parseAgentResponse(content: string): any {
     // v5.1: Use robust JSON parser with extraction, repair, and recovery
     const result = robustParse(content);
@@ -517,10 +407,9 @@ Format your response as JSON:
     
     const synthesisPrompt = this.buildSynthesisPrompt(proposals, task);
     
-    const response = await this.anthropicClient.messages.create({
-      model: SYNTHESIZER_MODEL,
-      max_tokens: 4096,
-      temperature: 0.2,
+    const response = await completeForRole({
+      role: 'synthesizer',
+      overrides: this.overrides,
       system: `You are the Hive Synthesizer. Your role is to analyze expert proposals and produce an honest, calibrated assessment.
 
 Instructions:
@@ -540,15 +429,17 @@ Output format:
   "key_decisions": ["major decisions made during synthesis"],
   "open_questions": ["unresolved questions that need more investigation"]
 }`,
-      messages: [
-        { role: 'user', content: synthesisPrompt }
-      ]
+      prompt: synthesisPrompt + JSON_ONLY
     });
     
-    const content = response.content[0].type === 'text' ? response.content[0].text : '';
+    const content = response.text;
     
     try {
-      const parsed = JSON.parse(content);
+      const result = robustParse(content);
+      if (!result.success || !result.data || typeof result.data !== 'object') {
+        throw new Error(result.error || 'synthesis JSON parse failed');
+      }
+      const parsed = result.data as Record<string, any>;
       
       // Map expert names back to agent IDs
       const contributingAgents = proposals
@@ -725,8 +616,8 @@ Output format:
  * v5.0: memory parameter removed - uses UnifiedMemoryCore internally
  */
 export function createDynamicOrchestrator(
-  config: APIConfig,
-  journal: JournalSystem
+  journal: JournalSystem,
+  overrides: ModelOverrides = {}
 ): DynamicHiveOrchestrator {
-  return new DynamicHiveOrchestrator(config, journal);
+  return new DynamicHiveOrchestrator(journal, overrides);
 }

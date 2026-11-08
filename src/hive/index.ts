@@ -22,11 +22,6 @@ export {
   createHiveArchitect,
   ModelSelector,
   createModelSelector,
-  selectModel,
-  LIVEBENCH_BASELINE,
-  getBestModelForDomain,
-  getModelsByDomain,
-  getFlagshipModels,
   logExecution,
   getLearningStats,
   getLearningAdjustments,
@@ -54,7 +49,6 @@ export type {
 } from './types/task.js';
 
 export type { 
-  APIConfig, 
   APIResponse, 
   RequestMetrics 
 } from './types/api.js';
@@ -66,8 +60,6 @@ export type {
   DynamicHiveResult,
   ArchitectResponse,
   ModelSelection,
-  ModelBenchmark,
-  ModelScores,
   AgentDomain,
   ExecutionLog,
   LearningAdjustment,

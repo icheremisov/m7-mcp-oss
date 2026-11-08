@@ -1,6 +1,6 @@
 # M7 MCP — реестр тулов
 
-Список получен запросом `tools/list` к собранному серверу (`dist/index.js`, версия пакета 3.22.2). Всего **37** тулов. Параметры каждого тула — в его `inputSchema`; здесь приведены назначение и перечень `action` (или `mode`) там, где он есть.
+Список получен запросом `tools/list` к собранному серверу (`dist/index.js`, версия пакета 3.22.2). Всего **38** тулов. Параметры каждого тула — в его `inputSchema`; здесь приведены назначение и перечень `action` (или `mode`) там, где он есть.
 
 Проверить фактический список:
 
@@ -82,6 +82,7 @@ M7_DEBUG=true node dist/index.js 2>&1 | grep -i "tools"
 | `mcp_m7_dcce` | двухканальный контент для внешних платформ: генерация, валидация, линт | `generate`, `validate`, `render`, `lint`, `extract`, `check`, `policies` |
 | `mcp_m7_repentance` | фиксация отклонений от методологии | `confess`, `wall_of_shame`, `stats` |
 | `mcp_m7_litany` | напоминание правил (тексты из `docs/CODEX_MARTIANUS.md`) | `recite`, `section`, `rite`, `invoke`, `sevenfold` |
+| `mcp_m7_models` | *(fork)* модели opencode по ролям LLM, пресеты, доступные модели | `current`, `presets`, `available` |
 
 ## Служебные
 

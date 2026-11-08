@@ -9,6 +9,8 @@
 // Types
 // ============================================================================
 
+import { listAvailableModels } from '../../llm/index.js';
+
 export interface ComponentStatus {
   name: string;
   status: 'online' | 'offline' | 'degraded';
@@ -66,33 +68,20 @@ async function checkChromaDB(): Promise<ComponentStatus> {
 }
 
 /**
- * Проверка OpenAI API
+ * Fork: LLM calls go through the local opencode CLI (no API keys in M7)
  */
-function checkOpenAI(): ComponentStatus {
-  if (!process.env.OPENAI_API_KEY) {
-    return { 
-      name: 'OpenAI API', 
-      status: 'offline', 
-      message: 'API key not set',
-      action: '`export OPENAI_API_KEY=your_key`'
+async function checkOpencode(): Promise<ComponentStatus> {
+  try {
+    const models = await listAvailableModels();
+    return { name: 'opencode CLI', status: models.length ? 'online' : 'degraded', message: `${models.length} models` };
+  } catch (error: any) {
+    return {
+      name: 'opencode CLI',
+      status: 'offline',
+      message: error.message,
+      action: 'install opencode and run `opencode auth login` (Hive and the classifier fallback need it)',
     };
   }
-  return { name: 'OpenAI API', status: 'online' };
-}
-
-/**
- * Проверка Anthropic API
- */
-function checkAnthropic(): ComponentStatus {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return { 
-      name: 'Anthropic API', 
-      status: 'offline', 
-      message: 'API key not set',
-      action: '`export ANTHROPIC_API_KEY=your_key`'
-    };
-  }
-  return { name: 'Anthropic API', status: 'online' };
 }
 
 /**
@@ -125,8 +114,7 @@ export async function checkSystemHealth(options?: {
   const components: ComponentStatus[] = [
     checkM7Core(),
     await checkChromaDB(),
-    checkOpenAI(),
-    checkAnthropic(),
+    await checkOpencode(),
   ];
   
   // Определить общий статус

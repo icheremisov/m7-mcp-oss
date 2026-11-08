@@ -1,6 +1,7 @@
 import { HiveTask, HiveResult } from '../types/task.js';
 import { AgentType, AgentProposal } from '../types/agent.js';
 import { APIManager } from '../api/apiManager.js';
+import type { ModelOverrides } from '../../llm/index.js';
 import { BaseAgent } from '../agents/baseAgent.js';
 import { ResearchAgent } from '../agents/researchAgent.js';
 import { ImplementationAgent } from '../agents/implementationAgent.js';
@@ -31,9 +32,10 @@ export class HiveOrchestrator {
   private consensusEngine: ConsensusEngine;  // v6.0: Weighted voting & conflict resolution
   
   constructor(
-    apiManager: APIManager,
-    journal: JournalSystem
+    journal: JournalSystem,
+    overrides: ModelOverrides = {}
   ) {
+    const apiManager = new APIManager(overrides);
     this.apiManager = apiManager;
     this.journal = journal;
     this.tsiSystem = new TSISystem();

@@ -2,8 +2,6 @@ export type AgentType = 'research' | 'implementation' | 'architecture' | 'securi
 
 export interface AgentConfig {
   id: AgentType;
-  provider: 'openai' | 'anthropic';
-  model: string;
   specialization: string;
   strengths: string[];
   cost_tier: 'premium' | 'standard' | 'economy';

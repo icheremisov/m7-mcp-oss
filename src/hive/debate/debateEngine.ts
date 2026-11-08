@@ -3,14 +3,13 @@
  * 
  * Real LLM-powered debates between Hive agents.
  * Each round: agents critique each other via LLM → agents refine via LLM → convergence check via LLM.
- * Uses FLAGSHIP models only (Opus 4.6, GPT-5.2) for maximum reasoning quality.
- * Cross-provider: critiques via Anthropic, refinements via OpenAI, convergence via Anthropic.
+ * All calls go through the opencode adapter (src/llm): critiques and convergence use
+ * role "critic", refinements use role "expert" with the refined agent's expertIndex.
  * 
  * @version 1.1.0
  */
 
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
+import { completeForRole, ModelOverrides, LlmRole } from '../../llm/index.js';
 import { HiveTask } from '../types/task.js';
 import { DynamicAgent, DynamicAgentProposal } from '../intelligence/types.js';
 import {
@@ -27,33 +26,13 @@ import { silentLogger as logger } from '../../core/utils/logger.js';
 // Valid critique verdicts for validation
 const VALID_VERDICTS: CritiqueVerdict[] = ['CONFIRM', 'REFINE', 'CONTEST', 'INSUFFICIENT'];
 
-// Cost per 1K tokens for debate models (flagships, April 2026)
-const DEBATE_COST_RATES: Record<string, number> = {
-  // Anthropic flagships
-  'claude-opus-4-7': 0.015 / 1000,
-  'claude-opus-4-6': 0.015 / 1000,
-  // OpenAI flagships
-  'gpt-5.5': 0.0175 / 1000,
-  'gpt-5.5-2026-04-23': 0.0175 / 1000,
-  'gpt-5.2': 0.0078 / 1000,
-};
-
-/**
- * Detect provider from model name.
- * Models starting with 'claude' → anthropic, otherwise → openai.
- */
-function detectProvider(model: string): 'openai' | 'anthropic' {
-  if (model.startsWith('claude')) return 'anthropic';
-  return 'openai';
-}
-
 export class DebateEngine {
-  private openaiClient: OpenAI;
-  private anthropicClient: Anthropic;
+  private overrides: ModelOverrides;
+  /** Actual usage accumulated from adapter results during the current debate */
+  private usage = { cost: 0, tokens: 0 };
   
-  constructor(openai: OpenAI, anthropic: Anthropic) {
-    this.openaiClient = openai;
-    this.anthropicClient = anthropic;
+  constructor(overrides: ModelOverrides = {}) {
+    this.overrides = overrides;
   }
   
   /**
@@ -79,6 +58,7 @@ export class DebateEngine {
     const budgetCap = Math.max(initialCost * cfg.budgetCapMultiplier, 0.01); // Min $0.01
     
     let currentProposals = proposals;
+    this.usage = { cost: 0, tokens: 0 };
     let totalCost = 0;
     let totalTokens = 0;
     const rounds: DebateRoundResult[] = [];
@@ -91,6 +71,14 @@ export class DebateEngine {
     
     for (let round = 1; round <= cfg.maxRounds; round++) {
       const roundStart = Date.now();
+      let mark = { ...this.usage };
+      const takeUsage = () => {
+        const delta = { cost: this.usage.cost - mark.cost, tokens: this.usage.tokens - mark.tokens };
+        mark = { ...this.usage };
+        totalCost += delta.cost;
+        totalTokens += delta.tokens;
+        return delta.cost;
+      };
       
       // Budget check at start of each round
       if (totalCost >= budgetCap) {
@@ -103,9 +91,7 @@ export class DebateEngine {
       const critiquePairs = this.selectCritiquePairs(currentProposals);
       const critiques = await this.generateCritiques(critiquePairs, currentProposals, task, cfg);
       
-      const critiqueCost = this.estimateCost(cfg.critiqueModel, critiques.length * 500);
-      totalCost += critiqueCost;
-      totalTokens += critiques.length * 500;
+      const critiqueCost = takeUsage();
       
       // Log critique summary
       const verdictCounts = this.countVerdicts(critiques);
@@ -120,18 +106,14 @@ export class DebateEngine {
         currentProposals, critiques, task, cfg
       );
       
-      const refineCost = this.estimateCost(cfg.refineModel, refinedProposals.length * 800);
-      totalCost += refineCost;
-      totalTokens += refinedProposals.length * 800;
+      const refineCost = takeUsage();
       
       // === Step 3: Check convergence ===
       const convergence = await this.checkConvergence(
         currentProposals, refinedProposals, task, cfg
       );
       
-      const convergenceCost = this.estimateCost(cfg.convergenceModel, 300);
-      totalCost += convergenceCost;
-      totalTokens += 300;
+      const convergenceCost = takeUsage();
       
       // Record round
       const roundResult: DebateRoundResult = {
@@ -277,7 +259,7 @@ export class DebateEngine {
       `Respond JSON: {"verdict":"CONFIRM|REFINE|CONTEST|INSUFFICIENT","reasoning":"why","confidence":0.7,"suggested_changes":"if REFINE"}`
     ].filter(Boolean).join('\n');
 
-    const content = await this.callLLM(cfg.critiqueModel, systemPrompt, userPrompt, 800);
+    const content = await this.callLLM('critic', systemPrompt, userPrompt);
     const parsed = robustParse(content);
     
     const data = (parsed.success ? parsed.data : {}) as Record<string, any>;
@@ -370,7 +352,7 @@ export class DebateEngine {
     ].join('\n');
 
     try {
-      const content = await this.callLLM(cfg.refineModel, systemPrompt, userPrompt, 1500);
+      const content = await this.callLLM('expert', systemPrompt, userPrompt, proposal.expertIndex);
       const parsed = robustParse(content);
       
       if (!parsed.success) {
@@ -430,10 +412,9 @@ ${currSummary}
 Respond JSON only: {"convergence_score":0.85,"direction":"converging|diverging|stable"}`;
 
       const content = await this.callLLM(
-        cfg.convergenceModel,
+        'critic',
         'You are a debate convergence judge. Assess how much expert positions changed between rounds.',
-        convergencePrompt,
-        300
+        convergencePrompt
       );
       
       const parsed = robustParse(content);
@@ -482,59 +463,30 @@ Respond JSON only: {"convergence_score":0.85,"direction":"converging|diverging|s
   }
   
   // ============================================================================
-  // UNIFIED LLM CALLER (supports both providers)
+  // LLM CALLER (opencode adapter)
   // ============================================================================
   
-  /**
-   * Call LLM with auto-detection of provider from model name.
-   * Claude models → Anthropic, GPT models → OpenAI.
-   */
   private async callLLM(
-    model: string,
+    role: Extract<LlmRole, 'critic' | 'expert'>,
     systemPrompt: string,
     userPrompt: string,
-    maxTokens: number
+    expertIndex?: number
   ): Promise<string> {
-    const provider = detectProvider(model);
-    
-    if (provider === 'anthropic') {
-      const response = await this.anthropicClient.messages.create({
-        model,
-        max_tokens: maxTokens,
-        temperature: 0.3,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }]
-      });
-      return response.content[0].type === 'text' ? response.content[0].text : '';
-    } else {
-      const isGPT5 = model.startsWith('gpt-5');
-      const params: any = {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ]
-      };
-      // GPT-5 reasoning models: use max_completion_tokens (includes CoT overhead)
-      if (isGPT5) {
-        params.max_completion_tokens = maxTokens;
-      } else {
-        params.max_tokens = maxTokens;
-        params.temperature = 0.3;
-      }
-      const response = await this.openaiClient.chat.completions.create(params);
-      return response.choices[0].message.content || '';
-    }
+    const result = await completeForRole({
+      role,
+      system: systemPrompt,
+      prompt: userPrompt,
+      overrides: this.overrides,
+      expertIndex
+    });
+    this.usage.cost += result.cost;
+    this.usage.tokens += result.tokens.total;
+    return result.text;
   }
   
   // ============================================================================
   // HELPERS
   // ============================================================================
-  
-  private estimateCost(model: string, tokens: number): number {
-    const rate = DEBATE_COST_RATES[model] || 0.008 / 1000; // Default: flagship tier
-    return rate * tokens;
-  }
   
   private countVerdicts(critiques: LLMCritique[]): Record<CritiqueVerdict, number> {
     const counts: Record<CritiqueVerdict, number> = {

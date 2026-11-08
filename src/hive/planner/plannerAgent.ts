@@ -1,13 +1,12 @@
 /**
  * M7 Hive v3.0 - Planner Agent
  * 
- * Uses Claude Opus to decompose high-level goals into subtasks
+ * Uses the "planner" role model (opencode adapter, src/llm) to decompose high-level goals into subtasks
  * with dependencies for CNP auction-based execution.
  * 
  * @version 3.8.0
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 // v5.1: Use robust JSON parser
 import { robustParse } from '../utils/json/index.js';
@@ -18,35 +17,13 @@ import {
 } from './types.js';
 import { createLogger } from '../../core/utils/logger.js';
 const log = createLogger('[PlannerAgent]');
-import { getAnthropic, getClientPool } from '../api/clientPool.js';
-
-// Planner uses Claude Opus 4.6 for complex reasoning
-const PLANNER_MODEL = 'claude-opus-4-6';
+import { completeForRole, ModelOverrides } from '../../llm/index.js';
 
 /**
  * Planner Agent - Decomposes goals into executable subtasks
- * 
- * Uses ClientPool for connection reuse.
  */
 export class PlannerAgent {
-  private client: Anthropic;
-  
-  constructor(anthropicKey?: string) {
-    // Use ClientPool if initialized
-    if (getClientPool().isInitialized() && getClientPool().hasAnthropic()) {
-      this.client = getAnthropic('architect');  // Uses architect timeout for planning
-      log.debug(`[Planner] 🔄 Using pooled Anthropic client`);
-    } else if (anthropicKey) {
-      this.client = new Anthropic({
-        apiKey: anthropicKey,
-        maxRetries: 3,
-        timeout: 120000
-      });
-      log.debug(`[Planner] 🔑 Created direct Anthropic client`);
-    } else {
-      throw new Error('Anthropic API key required when ClientPool not initialized');
-    }
-    
+  constructor(private overrides: ModelOverrides = {}) {
     log.info('[Planner] ✅ Initialized');
   }
   
@@ -64,18 +41,15 @@ export class PlannerAgent {
     log.info(`[Planner] 🎯 Decomposing goal: ${goal.substring(0, 80)}...`);
     
     try {
-      log.debug(`[PlannerAgent] Calling Anthropic API...`);
-      const response = await this.client.messages.create({
-        model: PLANNER_MODEL,
-        max_tokens: 3000,
-        temperature: 0.2,
+      const response = await completeForRole({
+        role: 'planner',
+        overrides: this.overrides,
         system: this.getSystemPrompt(),
-        messages: [
-          { role: 'user', content: this.buildPrompt(goal, context, constraints) }
-        ]
+        prompt: this.buildPrompt(goal, context, constraints) + '\n\nReturn only the JSON, no prose before or after it.'
       });
+      log.debug(`[PlannerAgent] ${response.model} responded in ${response.durationMs}ms`);
       
-      const content = response.content[0].type === 'text' ? response.content[0].text : '';
+      const content = response.text;
       log.debug(`[PlannerAgent] Got response, parsing... (${content.substring(0, 100)}...)`);
       const result = this.parseResponse(content, goal);
       
@@ -335,6 +309,6 @@ Break this goal into specific, actionable subtasks. Consider:
 /**
  * Create Planner Agent instance
  */
-export function createPlannerAgent(anthropicKey: string): PlannerAgent {
-  return new PlannerAgent(anthropicKey);
+export function createPlannerAgent(overrides: ModelOverrides = {}): PlannerAgent {
+  return new PlannerAgent(overrides);
 }

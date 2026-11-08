@@ -1,10 +1,5 @@
 import { AgentType } from './agent.js';
 
-export interface APIConfig {
-  openai: string;
-  anthropic: string;
-}
-
 export interface APIResponse {
   content: string;
   tokens_used: number;

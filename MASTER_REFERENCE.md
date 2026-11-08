@@ -13,7 +13,7 @@ Cursor / any MCP client
         │ stdio (JSON-RPC)
         ▼
 src/index.ts (M7MCPServer)
-  ├─ registers 37 tools, each in its own try/catch (list: docs/TOOLS_REGISTRY.md)
+  ├─ registers 38 tools, each in its own try/catch (list: docs/TOOLS_REGISTRY.md)
   ├─ APIManager (Hive LLM clients)
   └─ tool handlers
        ├─ analyze_task ─► TaskRouter ─► session + cycle
