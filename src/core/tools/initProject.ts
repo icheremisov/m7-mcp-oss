@@ -11,6 +11,23 @@ import { createM7StructureInternal } from './createStructure.js';
 // v5.0: Use UnifiedMemoryCore instead of MemorySystem
 import { getMemoryCore, UnifiedMemoryCore } from '../../memory/auto/unified-memory-core.js';
 
+// Fork: never overwrite user files. Every file is written only if it does not exist yet.
+// Agent rule files (.cursorrules, .cursor/rules/*) are written only with M7_WRITE_AGENT_RULES=true.
+const WRITE_AGENT_RULES = process.env.M7_WRITE_AGENT_RULES === 'true';
+
+async function writeIfAbsent(filePath: string, content: string): Promise<boolean> {
+  try {
+    await fs.writeFile(filePath, content, { flag: 'wx' });
+    return true;
+  } catch (err: any) {
+    if (err.code === 'EEXIST') {
+      log.debug(`[init] kept existing ${filePath}`);
+      return false;
+    }
+    throw err;
+  }
+}
+
 /**
  * Result of Cold Start initialization
  */
@@ -341,7 +358,7 @@ ${technologies.map(tech => `- ${tech}`).join('\n')}
 *Created: ${new Date().toISOString()}*
 *Methodology: M7 IDEAL*`;
 
-  await fs.writeFile(path.join(memoryBankDir, 'projectbrief.md'), projectBrief);
+  await writeIfAbsent(path.join(memoryBankDir, 'projectbrief.md'), projectBrief);
   createdFiles.push({path: 'memory-bank/projectbrief.md', description: 'Foundation document'});
 
   // Product Context
@@ -376,7 +393,7 @@ This project was initialized with M7 methodology to ensure:
 
 *Updated: ${new Date().toISOString()}*`;
 
-  await fs.writeFile(path.join(memoryBankDir, 'productContext.md'), productContext);
+  await writeIfAbsent(path.join(memoryBankDir, 'productContext.md'), productContext);
   createdFiles.push({path: 'memory-bank/productContext.md', description: 'Product vision and goals'});
 
   // Active Context
@@ -408,7 +425,7 @@ This project was initialized with M7 methodology to ensure:
 
 *Updated: ${new Date().toISOString()}*`;
 
-  await fs.writeFile(path.join(memoryBankDir, 'activeContext.md'), activeContext);
+  await writeIfAbsent(path.join(memoryBankDir, 'activeContext.md'), activeContext);
   createdFiles.push({path: 'memory-bank/activeContext.md', description: 'Current work focus'});
 
   // System Patterns
@@ -441,7 +458,7 @@ This project was initialized with M7 methodology to ensure:
 
 *Updated: ${new Date().toISOString()}*`;
 
-  await fs.writeFile(path.join(memoryBankDir, 'systemPatterns.md'), systemPatterns);
+  await writeIfAbsent(path.join(memoryBankDir, 'systemPatterns.md'), systemPatterns);
   createdFiles.push({path: 'memory-bank/systemPatterns.md', description: 'Architecture and patterns'});
 
   // Tech Context
@@ -476,7 +493,7 @@ ${technologies.map(tech => `- **${tech}**: Version and configuration TBD`).join(
 
 *Updated: ${new Date().toISOString()}*`;
 
-  await fs.writeFile(path.join(memoryBankDir, 'techContext.md'), techContext);
+  await writeIfAbsent(path.join(memoryBankDir, 'techContext.md'), techContext);
   createdFiles.push({path: 'memory-bank/techContext.md', description: 'Technical environment'});
 
   // Progress
@@ -519,7 +536,7 @@ ${technologies.map(tech => `- **${tech}**: Version and configuration TBD`).join(
 
 *Updated: ${new Date().toISOString()}*`;
 
-  await fs.writeFile(path.join(memoryBankDir, 'progress.md'), progress);
+  await writeIfAbsent(path.join(memoryBankDir, 'progress.md'), progress);
   createdFiles.push({path: 'memory-bank/progress.md', description: 'Project progress tracking'});
 }
 
@@ -602,8 +619,9 @@ Each phase produces an artifact that serves as a memory bank for future tasks:
 *Project: ${projectName}*
 *Created: ${new Date().toISOString()}*`;
 
-  await fs.writeFile(path.join(currentDir, '.cursorrules'), cursorRules);
-  createdFiles.push({path: '.cursorrules', description: 'Project-specific M7 methodology rules'});
+  if (WRITE_AGENT_RULES && await writeIfAbsent(path.join(currentDir, '.cursorrules'), cursorRules)) {
+    createdFiles.push({path: '.cursorrules', description: 'Project-specific M7 methodology rules'});
+  }
 }
 
 async function createKnowledgeSystem(
@@ -616,7 +634,6 @@ async function createKnowledgeSystem(
 ) {
   // 1. Create .cursor/rules/m7-memory.mdc
   const cursorRulesDir = path.join(currentDir, '.cursor', 'rules');
-  await fs.mkdir(cursorRulesDir, { recursive: true });
 
   const mdcContent = `---
 description: M7 project knowledge system — reference files index
@@ -639,8 +656,12 @@ After completing a task, update the relevant file:
 - Established a new pattern or convention → append to CODING_STANDARDS.md
 `;
 
-  await fs.writeFile(path.join(cursorRulesDir, 'm7-memory.mdc'), mdcContent);
-  createdFiles.push({path: '.cursor/rules/m7-memory.mdc', description: 'M7 knowledge system — auto-loaded project memory'});
+  if (WRITE_AGENT_RULES) {
+    await fs.mkdir(cursorRulesDir, { recursive: true });
+    if (await writeIfAbsent(path.join(cursorRulesDir, 'm7-memory.mdc'), mdcContent)) {
+      createdFiles.push({path: '.cursor/rules/m7-memory.mdc', description: 'M7 knowledge system — auto-loaded project memory'});
+    }
+  }
 
   // 2. Create INDEX.md
   const techList = technologies.length > 0 && technologies[0] !== 'To be determined'
@@ -682,7 +703,7 @@ ${projectName}/
 *Initialized: ${new Date().toISOString()}*
 `;
 
-  await fs.writeFile(path.join(currentDir, 'INDEX.md'), indexContent);
+  await writeIfAbsent(path.join(currentDir, 'INDEX.md'), indexContent);
   createdFiles.push({path: 'INDEX.md', description: 'Project navigation map'});
 
   // 3. Create MASTER_REFERENCE.md
@@ -715,7 +736,7 @@ ${projectName}/
 *Initialized: ${new Date().toISOString()}*
 `;
 
-  await fs.writeFile(path.join(currentDir, 'MASTER_REFERENCE.md'), masterRefContent);
+  await writeIfAbsent(path.join(currentDir, 'MASTER_REFERENCE.md'), masterRefContent);
   createdFiles.push({path: 'MASTER_REFERENCE.md', description: 'Full architecture reference'});
 
   // 4. Create CODING_STANDARDS.md
@@ -742,7 +763,7 @@ ${techList}
 *Initialized: ${new Date().toISOString()}*
 `;
 
-  await fs.writeFile(path.join(currentDir, 'CODING_STANDARDS.md'), standardsContent);
+  await writeIfAbsent(path.join(currentDir, 'CODING_STANDARDS.md'), standardsContent);
   createdFiles.push({path: 'CODING_STANDARDS.md', description: 'Project coding conventions'});
 
   // 5. Create CYCLE_REGISTRY.md
@@ -772,7 +793,7 @@ ${techList}
 *Initialized: ${new Date().toISOString()}*
 `;
 
-  await fs.writeFile(path.join(currentDir, 'CYCLE_REGISTRY.md'), registryContent);
+  await writeIfAbsent(path.join(currentDir, 'CYCLE_REGISTRY.md'), registryContent);
   createdFiles.push({path: 'CYCLE_REGISTRY.md', description: 'Decision and cycle history'});
 }
 
@@ -827,7 +848,7 @@ Follow the **Discovery → Architecture → Planning → Implementation** cycle 
 ---
 *Initialized with M7 MCP v3.4*`;
 
-  await fs.writeFile(path.join(currentDir, 'README.md'), readme);
+  await writeIfAbsent(path.join(currentDir, 'README.md'), readme);
   createdFiles.push({path: 'README.md', description: 'Project documentation (for humans)'});
 
   // Create or update .gitignore to exclude .m7/ directory
@@ -998,7 +1019,7 @@ This index should be updated when:
 *Generated by M7 MCP v3.4 - Cold Start System*
 `;
 
-  await fs.writeFile(path.join(currentDir, 'INDEX.md'), indexContent);
+  await writeIfAbsent(path.join(currentDir, 'INDEX.md'), indexContent);
   createdFiles.push({path: 'INDEX.md', description: 'AI navigation index (for AI assistants)'});
 }
 

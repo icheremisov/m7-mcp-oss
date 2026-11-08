@@ -64,8 +64,8 @@ export class VisualizerServer {
     this.isRunning = true;
     
     log.debug(`M7 Visualizer] Server started`);
-    log.debug(`M7 Visualizer] HTTP: http://localhost:${this.config.httpPort}`);
-    log.debug(`M7 Visualizer] WebSocket: ws://localhost:${this.config.wsPort}`);
+    log.debug(`M7 Visualizer] HTTP: http://127.0.0.1:${this.config.httpPort}`);
+    log.debug(`M7 Visualizer] WebSocket: ws://127.0.0.1:${this.config.wsPort}`);
     
     return { wsPort: this.config.wsPort, httpPort: this.config.httpPort };
   }
@@ -121,7 +121,8 @@ export class VisualizerServer {
         this.handleHttpRequest(req, res);
       });
       
-      this.httpServer.listen(this.config.httpPort, () => {
+      // Fork: loopback only — the graph exposes file paths and the current task
+      this.httpServer.listen(this.config.httpPort, '127.0.0.1', () => {
         resolve();
       });
       
@@ -134,10 +135,13 @@ export class VisualizerServer {
   private handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = req.url || '/';
     
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // Fork: no CORS — only the page served from this origin may read the API
+    const origin = req.headers.origin;
+    if (origin && !this.isLocalOrigin(origin)) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
     
     if (req.method === 'OPTIONS') {
       res.writeHead(200);
@@ -184,9 +188,23 @@ export class VisualizerServer {
   // WEBSOCKET SERVER
   // ============================================
   
+  private isLocalOrigin(origin: string): boolean {
+    try {
+      const u = new URL(origin);
+      return (u.hostname === 'localhost' || u.hostname === '127.0.0.1') && Number(u.port) === this.config.httpPort;
+    } catch {
+      return false;
+    }
+  }
+
   private startWebSocketServer(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.wss = new WebSocketServer({ port: this.config.wsPort });
+      this.wss = new WebSocketServer({
+        port: this.config.wsPort,
+        host: '127.0.0.1',
+        // Fork: reject cross-site WebSocket connections from other web pages
+        verifyClient: (info: { origin: string }) => !info.origin || this.isLocalOrigin(info.origin),
+      });
       
       this.wss.on('connection', (ws: WebSocket) => {
         this.handleConnection(ws);
@@ -711,12 +729,15 @@ export class VisualizerServer {
   
   <script>
     const WS_PORT = ${this.config.wsPort};
+    function esc(v) {
+      return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
     let ws = null;
     let graphData = null;
     
     // Connect to WebSocket
     function connect() {
-      ws = new WebSocket('ws://localhost:' + WS_PORT);
+      ws = new WebSocket('ws://127.0.0.1:' + WS_PORT);
       
       ws.onopen = () => {
         document.getElementById('status-text').textContent = 'Connected';
@@ -768,8 +789,8 @@ export class VisualizerServer {
       if (ctx.history.length > 0) {
         timeline.innerHTML = ctx.history.slice(-5).reverse().map(h => \`
           <div class="timeline-item">
-            <div class="timeline-file">\${h.file.split('/').pop()}</div>
-            <div class="timeline-time">\${h.action} - \${new Date(h.timestamp).toLocaleTimeString()}</div>
+            <div class="timeline-file">\${esc(h.file.split('/').pop())}</div>
+            <div class="timeline-time">\${esc(h.action)} - \${new Date(h.timestamp).toLocaleTimeString()}</div>
           </div>
         \`).join('');
       }
@@ -858,11 +879,11 @@ export class VisualizerServer {
     function showTooltip(event, node) {
       const tooltip = document.getElementById('tooltip');
       tooltip.innerHTML = \`
-        <strong>\${node.name}</strong><br>
-        Type: \${node.type}<br>
-        File: \${node.filePath.split('/').pop()}<br>
-        Dependencies: \${node.dependencies}<br>
-        Dependents: \${node.dependents}
+        <strong>\${esc(node.name)}</strong><br>
+        Type: \${esc(node.type)}<br>
+        File: \${esc(node.filePath.split('/').pop())}<br>
+        Dependencies: \${esc(node.dependencies)}<br>
+        Dependents: \${esc(node.dependents)}
         \${node.isOrphan ? '<br><span style="color:#BF616A">⚠️ Orphan (unused)</span>' : ''}
       \`;
       tooltip.style.left = event.pageX + 10 + 'px';

@@ -14,9 +14,9 @@
  * 6. process.cwd() (warn if M7 installation dir or bare home)
  */
 
-import { join, resolve, isAbsolute } from 'path';
-import { existsSync, readdirSync, statSync } from 'fs';
-import { homedir } from 'os';
+import { join, resolve, isAbsolute, sep, parse } from 'path';
+import { existsSync, readdirSync, statSync, mkdirSync, realpathSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { silentLogger as logger } from './logger.js';
 
@@ -63,7 +63,33 @@ function resolveExplicitProjectPath(explicitPath: string): string {
     throw new Error(`[M7 ProjectPath] Path does not exist: ${resolvedPath}`);
   }
 
-  return resolve(resolvedPath);
+  const finalPath = resolve(resolvedPath);
+  assertSafeProjectRoot(finalPath);
+  return finalPath;
+}
+
+/**
+ * Fork: a project root must never be the home directory or a filesystem root, and when
+ * M7_ALLOWED_ROOTS (path-delimited list) is set it must lie inside one of those directories.
+ */
+export function assertSafeProjectRoot(dirPath: string): void {
+  let real = resolve(dirPath);
+  try { real = realpathSync(real); } catch { /* keep resolved */ }
+  if (isBareHomeDirectory(real) || parse(real).root === real) {
+    throw new Error(`[M7 ProjectPath] Refusing to use ${real} as a project root (home or filesystem root)`);
+  }
+  const allowed = (process.env.M7_ALLOWED_ROOTS ?? '').split(process.platform === 'win32' ? ';' : ':')
+    .map(s => s.trim()).filter(Boolean).map(s => resolve(s));
+  if (allowed.length && !allowed.some(root => real === root || real.startsWith(root.endsWith(sep) ? root : root + sep))) {
+    throw new Error(`[M7 ProjectPath] ${real} is outside M7_ALLOWED_ROOTS`);
+  }
+}
+
+/** Fork: harmless placeholder used instead of the home directory when no project could be resolved. */
+function noProjectSandbox(): string {
+  const dir = join(tmpdir(), 'm7-no-project');
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function isM7InstallationDirectory(dirPath: string): boolean {
@@ -80,7 +106,9 @@ function isBareHomeDirectory(dirPath: string): boolean {
 }
 
 function isUnsafeFallbackPath(dirPath: string): boolean {
-  return isBareHomeDirectory(dirPath) && !isValidProjectDirectory(dirPath);
+  // Fork: home is never a project, even if it contains .git or package.json
+  const resolved = resolve(dirPath);
+  return isBareHomeDirectory(resolved) || parse(resolved).root === resolved;
 }
 
 function decodeCursorProjectSlug(slug: string): string | null {
@@ -158,6 +186,9 @@ function getCursorProjectActivityMtime(projectDir: string): number {
 }
 
 function resolveWorkspaceFromCursorProjectsDir(): string | null {
+  // Fork: guessing "the most recently active Cursor project" picks the wrong repo for other
+  // clients (Claude Code, Codex). Opt-in only.
+  if (process.env.M7_CURSOR_PROJECTS_SCAN !== 'true') return null;
   const projectsDir = getCursorProjectsDir();
   if (!existsSync(projectsDir)) return null;
 
@@ -283,7 +314,8 @@ function resolveEnvFallbackPath(allowCache: boolean): string {
     } else {
       logger.info(`[M7 ProjectPath] Awaiting MCP Roots — home directory fallback blocked (${candidates})`);
     }
-    return candidates;
+    // Fork: never hand out the home directory — writes go to a throwaway temp dir instead
+    return noProjectSandbox();
   }
 
   const bestCwd = candidates;

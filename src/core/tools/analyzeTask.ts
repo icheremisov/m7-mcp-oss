@@ -221,7 +221,7 @@ export const analyzeTaskTool = {
       const contextProvider = getContextProvider();
       const ctx = await contextProvider.getContext();
       currentContextHeader = ctx.header;
-      log.debug(`M7 v3.1] Context injected: ${ctx.formattedTime}, models: ${ctx.models.openai.length} OpenAI, ${ctx.models.anthropic.length} Anthropic`);
+      log.debug(`M7 v3.1] Context injected: ${ctx.formattedTime}, model roles: ${ctx.models.roles.length}`);
     } catch (e: any) {
       log.debug(`M7 v3.1] Context provider error: ${e.message}`);
     }
@@ -257,10 +257,14 @@ export const analyzeTaskTool = {
 
     // v3.4 Cold Start Detection - Auto-initialize empty projects
     let coldStartResult: ColdStartResult | null = null;
+    let coldStartHint = '';
     try {
       const needsInit = await needsM7Init(projectPath);
-      
-      if (needsInit) {
+      // Fork: no silent writes into the user's repo — auto-init only with M7_AUTO_INIT=true,
+      // otherwise the agent is told to run mcp_m7_init_project explicitly.
+      if (needsInit && process.env.M7_AUTO_INIT !== 'true') {
+        coldStartHint = `> ℹ️ M7 ещё не инициализирован в \`${projectPath}\`. Чтобы создать memory-bank и файлы знаний, вызовите \`mcp_m7_init_project\` (существующие файлы не перезаписываются).\n\n`;
+      } else if (needsInit) {
         log.debug(`M7 v3.4] Cold Start detected: initializing ${projectPath}`);
         coldStartResult = await initProjectInternal({
           projectPath,
@@ -667,7 +671,7 @@ ${coldStartResult.firstTask ? `### 🎯 Первый таск создан:
           type: 'text',
           text: `# 🎯 M7 Task Analysis Complete
 ${healthStatus}
-${coldStartSection}${currentContextHeader}
+${coldStartHint}${coldStartSection}${currentContextHeader}
 ${intentHeader}
 ${interpretationSection ? `\n${interpretationSection}\n` : ''}${scopeAlertSection ? `\n${scopeAlertSection}\n` : ''}${scopeScannerSection}${architectureContextSection}${contextSection}${crossSessionContext}${schemaWarnings.length > 0 ? `## 📋 Project Schema Warnings\n${schemaWarnings.join('\n')}\n\n` : ''}${whyM7Matters}
 

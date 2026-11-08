@@ -15,6 +15,7 @@
 
 import { z } from 'zod';
 import * as fs from 'fs/promises';
+import { realpathSync } from 'fs';
 import * as pathModule from 'path';
 import { getMeshManager } from '../MeshManager.js';
 import type { ContextType, IntentType, MeshPeerContext } from '../types.js';
@@ -595,10 +596,29 @@ async function handleRemoteTasks(params: any): Promise<string> {
 const BLOCKED_EXTENSIONS = ['.env', '.key', '.pem', '.p12', '.pfx', '.jks', '.keystore'];
 
 function resolveAndValidatePath(relativePath: string): string {
-  const projectPath = getProjectPath();
+  const projectPath = pathModule.resolve(getProjectPath());
   const resolved = pathModule.resolve(projectPath, relativePath);
-  if (!resolved.startsWith(projectPath)) {
+  // Fork: compare with a trailing separator (so /proj-evil does not pass for /proj)
+  if (!resolved.startsWith(projectPath + pathModule.sep)) {
     throw new Error(`Path traversal blocked: ${relativePath}`);
+  }
+  // Fork: no dot-segments (.git/hooks, .cursor, .claude, .vscode, .env …) and no secret files
+  const segments = pathModule.relative(projectPath, resolved).split(pathModule.sep);
+  if (segments.some(seg => seg.startsWith('.'))) {
+    throw new Error(`Blocked: hidden paths cannot be exchanged via mesh: ${relativePath}`);
+  }
+  if (BLOCKED_EXTENSIONS.includes(pathModule.extname(resolved).toLowerCase())) {
+    throw new Error(`Blocked: ${pathModule.extname(resolved)} files cannot be exchanged (security)`);
+  }
+  // Fork: refuse to follow symlinks that leave the project
+  try {
+    const realParent = realpathSync(pathModule.dirname(resolved));
+    const realRoot = realpathSync(projectPath);
+    if (realParent !== realRoot && !realParent.startsWith(realRoot + pathModule.sep)) {
+      throw new Error(`Path escapes project via symlink: ${relativePath}`);
+    }
+  } catch (e: any) {
+    if (e.code !== 'ENOENT') throw e;
   }
   return resolved;
 }

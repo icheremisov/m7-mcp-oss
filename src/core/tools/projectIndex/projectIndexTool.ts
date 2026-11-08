@@ -17,7 +17,7 @@ import {
   DEFAULT_INDEX_SECTIONS,
   DEFAULT_EXCLUDE_PATTERNS
 } from './types.js';
-import { getProjectPath } from '../../utils/projectPath.js';
+import { getProjectPath, assertSafeProjectRoot } from '../../utils/projectPath.js';
 import { createLogger } from '../../utils/logger.js';
 // v5.0: Use UnifiedMemoryCore instead of MemorySystem
 import { getMemoryCore, UnifiedMemoryCore } from '../../../memory/auto/unified-memory-core.js';
@@ -109,7 +109,12 @@ export const projectIndexTool = {
     try {
       const params = ProjectIndexRequestSchema.parse(request);
       const projectPath = params.project_path || getProjectPath();
-      const outputPath = params.output_path || path.join(projectPath, 'PROJECT_INDEX.md');
+      assertSafeProjectRoot(projectPath);
+      const outputPath = path.resolve(projectPath, params.output_path || 'PROJECT_INDEX.md');
+      // Fork: the index may only be written inside the project
+      if (outputPath !== projectPath && !outputPath.startsWith(path.resolve(projectPath) + path.sep)) {
+        throw new Error(`output_path must be inside the project: ${outputPath}`);
+      }
 
       log.debug(`Using project path: ${projectPath}`);
       log.debug(`${params.action} action for project: ${projectPath}`);
