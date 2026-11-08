@@ -22,9 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tests = [
   { name: 'Atomic Write', file: 'test-atomic-write-scenarios.mjs' },
   { name: 'Retry System', file: 'test-retry-scenarios.mjs' },
-  { name: 'Provider Manager', file: 'test-provider-manager-scenarios.mjs' },
   { name: 'Context Guard', file: 'test-context-guard-scenarios.mjs' },
-  { name: 'Integration', file: 'test-integration-scenarios.mjs' },
 ];
 
 const results = [];

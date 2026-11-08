@@ -80,7 +80,7 @@ export async function logExecution(
   task: string,
   agent: DynamicAgent,
   model: string,
-  provider: 'openai' | 'anthropic',
+  provider: string,
   response: string,
   metrics: {
     tokensUsed: number;

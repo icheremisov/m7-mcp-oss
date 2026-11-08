@@ -14,9 +14,9 @@
  * 6. process.cwd() (warn if M7 installation dir or bare home)
  */
 
-import { join, resolve, isAbsolute } from 'path';
-import { existsSync, readdirSync, statSync } from 'fs';
-import { homedir } from 'os';
+import { join, resolve, isAbsolute, sep, parse } from 'path';
+import { existsSync, readdirSync, statSync, mkdtempSync, realpathSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { silentLogger as logger } from './logger.js';
 
@@ -63,7 +63,44 @@ function resolveExplicitProjectPath(explicitPath: string): string {
     throw new Error(`[M7 ProjectPath] Path does not exist: ${resolvedPath}`);
   }
 
-  return resolve(resolvedPath);
+  const finalPath = resolve(resolvedPath);
+  assertSafeProjectRoot(finalPath);
+  return finalPath;
+}
+
+/**
+ * Fork: a project root must never be the home directory or a filesystem root, and when
+ * M7_ALLOWED_ROOTS (path-delimited list) is set it must lie inside one of those directories.
+ */
+export function assertSafeProjectRoot(dirPath: string): void {
+  let real = resolve(dirPath);
+  try { real = realpathSync(real); } catch { /* keep resolved */ }
+  if (isBareHomeDirectory(real) || parse(real).root === real) {
+    throw new Error(`[M7 ProjectPath] Refusing to use ${real} as a project root (home or filesystem root)`);
+  }
+  const allowed = (process.env.M7_ALLOWED_ROOTS ?? '').split(process.platform === 'win32' ? ';' : ':')
+    .map(s => s.trim()).filter(Boolean).map(s => resolve(s));
+  if (allowed.length && !allowed.some(root => real === root || real.startsWith(root.endsWith(sep) ? root : root + sep))) {
+    throw new Error(`[M7 ProjectPath] ${real} is outside M7_ALLOWED_ROOTS`);
+  }
+}
+
+/** Non-throwing variant: every resolved workspace (Roots, env, cwd) must pass this before use. */
+function isAllowedProjectRoot(dirPath: string): boolean {
+  try {
+    assertSafeProjectRoot(dirPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Fork: harmless placeholder used instead of the home directory when no project could be resolved. */
+let noProjectDir: string | null = null;
+function noProjectSandbox(): string {
+  // mkdtemp: unpredictable name, 0700 — a fixed shared-/tmp path could be a planted symlink
+  if (!noProjectDir || !existsSync(noProjectDir)) noProjectDir = mkdtempSync(join(tmpdir(), 'm7-no-project-'));
+  return noProjectDir;
 }
 
 function isM7InstallationDirectory(dirPath: string): boolean {
@@ -80,7 +117,9 @@ function isBareHomeDirectory(dirPath: string): boolean {
 }
 
 function isUnsafeFallbackPath(dirPath: string): boolean {
-  return isBareHomeDirectory(dirPath) && !isValidProjectDirectory(dirPath);
+  // Fork: home is never a project, even if it contains .git or package.json
+  const resolved = resolve(dirPath);
+  return isBareHomeDirectory(resolved) || parse(resolved).root === resolved;
 }
 
 function decodeCursorProjectSlug(slug: string): string | null {
@@ -158,6 +197,9 @@ function getCursorProjectActivityMtime(projectDir: string): number {
 }
 
 function resolveWorkspaceFromCursorProjectsDir(): string | null {
+  // Fork: guessing "the most recently active Cursor project" picks the wrong repo for other
+  // clients (Claude Code, Codex). Opt-in only.
+  if (process.env.M7_CURSOR_PROJECTS_SCAN !== 'true') return null;
   const projectsDir = getCursorProjectsDir();
   if (!existsSync(projectsDir)) return null;
 
@@ -194,17 +236,17 @@ function pickBestWorkspaceCandidate(candidates: string[]): string | null {
     .filter((candidate, index, all) => all.indexOf(candidate) === index);
 
   for (const candidate of normalized) {
-    if (!existsSync(candidate) || isUnsafeFallbackPath(candidate)) continue;
+    if (!existsSync(candidate) || !isAllowedProjectRoot(candidate)) continue;
     if (isValidProjectDirectory(candidate)) return candidate;
   }
 
   for (const candidate of normalized) {
-    if (!existsSync(candidate) || isUnsafeFallbackPath(candidate)) continue;
+    if (!existsSync(candidate) || !isAllowedProjectRoot(candidate)) continue;
     if (isM7InstallationDirectory(candidate)) return candidate;
   }
 
   for (const candidate of normalized) {
-    if (!existsSync(candidate) || isUnsafeFallbackPath(candidate)) continue;
+    if (!existsSync(candidate) || !isAllowedProjectRoot(candidate)) continue;
     return candidate;
   }
 
@@ -213,7 +255,7 @@ function pickBestWorkspaceCandidate(candidates: string[]): string | null {
 
 function resolveCursorWorkspaceFromEnv(): string | null {
   const cursorWorkspace = process.env.CURSOR_WORKSPACE;
-  if (cursorWorkspace && existsSync(cursorWorkspace)) {
+  if (cursorWorkspace && existsSync(cursorWorkspace) && isAllowedProjectRoot(cursorWorkspace)) {
     return cursorWorkspace;
   }
 
@@ -244,7 +286,16 @@ function resolveCursorWorkspaceFromEnv(): string | null {
   return null;
 }
 
+/** Fork: whatever the heuristics pick must pass the root policy, otherwise use the placeholder. */
 function resolveEnvFallbackPath(allowCache: boolean): string {
+  const picked = resolveEnvFallbackPathUnchecked(allowCache);
+  if (isAllowedProjectRoot(picked) || picked === noProjectDir) return picked;
+  logger.warn(`[M7 ProjectPath] ${picked} violates the project root policy (home, filesystem root or outside M7_ALLOWED_ROOTS)`);
+  if (cachedProjectPath === picked) cachedProjectPath = null;
+  return noProjectSandbox();
+}
+
+function resolveEnvFallbackPathUnchecked(allowCache: boolean): string {
   const cursorPath = resolveCursorWorkspaceFromEnv();
   if (cursorPath) {
     if (allowCache) {
@@ -283,7 +334,8 @@ function resolveEnvFallbackPath(allowCache: boolean): string {
     } else {
       logger.info(`[M7 ProjectPath] Awaiting MCP Roots — home directory fallback blocked (${candidates})`);
     }
-    return candidates;
+    // Fork: never hand out the home directory — writes go to a throwaway temp dir instead
+    return noProjectSandbox();
   }
 
   const bestCwd = candidates;
@@ -312,6 +364,10 @@ function notifyChange(oldPath: string | null, newPath: string): void {
 }
 
 function applyResolvedWorkspace(workspacePath: string, fromRoots: boolean): string {
+  if (!isAllowedProjectRoot(workspacePath)) {
+    logger.warn(`[M7 ProjectPath] Ignoring workspace outside the project root policy: ${workspacePath}`);
+    return noProjectSandbox();
+  }
   const oldPath = cachedProjectPath;
   cachedProjectPath = resolve(workspacePath);
   resolvedFromRoots = fromRoots;

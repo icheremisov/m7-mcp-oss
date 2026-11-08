@@ -3,8 +3,9 @@ const log = createLogger('[intentClassifier]');
 /**
  * M7 v3.5 - LLM Intent Classifier with Pattern Selection
  * 
- * Замена regex-based intentDetector на GPT-4o-mini с structured outputs.
- * Использует Zod schema для валидации ответа.
+ * Fork: классификация через jev (OpenCode Zen System One, вероятности по вопросам),
+ * фолбэк — opencode run с моделью роли "classifier", затем getDefaultIntent().
+ * M7_CLASSIFIER=jev|opencode|off выбирает первый способ.
  * 
  * v3.5: LLM сам выбирает patternsToScan и fileExtensions из списка доступных.
  * 
@@ -13,9 +14,9 @@ const log = createLogger('[intentClassifier]');
  * @date 2026-01-22
  */
 
-import OpenAI from 'openai';
-import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
+import { askJev, argmax, completeForRole, JevQuestion } from '../../llm/index.js';
+import { robustParse } from '../../hive/utils/json/index.js';
 
 // ============================================
 // TYPES
@@ -209,62 +210,206 @@ const SYSTEM_PROMPT = `Ты M7 Intent Classifier. Анализируй зада�
 → intent: EXPLAIN, route: light, allowCode: false, patternsToScan: [], fileExtensions: []`;
 
 // ============================================
+// JEV QUESTIONS (fork)
+// ============================================
+
+const JEV_THRESHOLD = 0.5;
+const AGENT_TYPES: AgentType[] = ['research', 'implementation', 'architecture', 'security', 'testing', 'performance'];
+
+const INTENT_PHASE: Record<Intent, Phase> = {
+  LOGS: 'DISCOVERY', EXPLAIN: 'DISCOVERY', DIAGNOSE: 'DISCOVERY', DISCUSS: 'DISCOVERY',
+  PLAN: 'PLANNING', DOCS: 'PLANNING', FIX: 'IMPLEMENTATION', IMPLEMENT: 'IMPLEMENTATION', DEPLOY: 'DEPLOYMENT',
+};
+
+const ROUTE_ESTIMATES: Record<Route, { files: number; minutes: number }> = {
+  light: { files: 2, minutes: 15 },
+  medium: { files: 6, minutes: 60 },
+  heavy: { files: 15, minutes: 240 },
+  decompose: { files: 30, minutes: 480 },
+};
+
+const PATTERN_EXTENSIONS: Record<ScanPatternId, string[]> = {
+  'console-logs': ['.js', '.ts', '.jsx', '.tsx'],
+  'todo-comments': ['.ts', '.tsx', '.js', '.jsx', '.py', '.php', '.go', '.rs', '.java', '.cs', '.dart'],
+  'magic-numbers': ['.js', '.ts', '.jsx', '.tsx'],
+  'php7-to-php8': ['.php'],
+  'php-legacy': ['.php'],
+  'commonjs-to-esm': ['.js', '.cjs'],
+  'var-to-const-let': ['.js', '.jsx'],
+  'callback-to-promise': ['.js', '.ts', '.jsx', '.tsx'],
+  'javascript-to-typescript': ['.js', '.jsx'],
+  'any-types': ['.ts', '.tsx'],
+  'react-class-to-hooks': ['.jsx', '.tsx', '.js', '.ts'],
+  'react-deprecated': ['.jsx', '.tsx', '.js', '.ts'],
+  'react-string-refs': ['.jsx', '.tsx', '.js', '.ts'],
+  'python2-to-python3': ['.py'],
+  'css-vendor-prefixes': ['.css', '.scss', '.less'],
+  'sql-injection-risk': ['.php', '.js', '.ts', '.py'],
+};
+
+const PATTERN_QUESTIONS: Record<ScanPatternId, string> = {
+  'console-logs': 'The task requires finding or replacing console.log/warn/error/debug calls in JS/TS code.',
+  'todo-comments': 'The task requires finding TODO/FIXME/HACK comments in the code.',
+  'magic-numbers': 'The task is about replacing magic numbers with named constants.',
+  'php7-to-php8': 'The task is a PHP 7 to PHP 8 migration.',
+  'php-legacy': 'The task is about cleaning up legacy PHP patterns (globals, extract).',
+  'commonjs-to-esm': 'The task is a CommonJS (require/module.exports) to ES modules migration.',
+  'var-to-const-let': 'The task is about replacing var declarations with const/let.',
+  'callback-to-promise': 'The task is about converting callbacks to promises or async/await.',
+  'javascript-to-typescript': 'The task is a JavaScript to TypeScript migration.',
+  'any-types': 'The task is about removing or replacing `any` types in TypeScript.',
+  'react-class-to-hooks': 'The task is converting React class components to function components with hooks.',
+  'react-deprecated': 'The task is about replacing deprecated React APIs.',
+  'react-string-refs': 'The task is about replacing React string refs with useRef/createRef.',
+  'python2-to-python3': 'The task is a Python 2 to Python 3 migration.',
+  'css-vendor-prefixes': 'The task is about CSS vendor prefixes (-webkit-, -moz-).',
+  'sql-injection-risk': 'The task is about finding or fixing SQL injection risks.',
+};
+
+const JEV_QUESTIONS: Record<string, JevQuestion> = {
+  intent: {
+    type: 'choice',
+    instructions: 'What does the user ask the coding agent to do?',
+    criteria: {
+      LOGS: 'check logs, prepare a report', EXPLAIN: 'explain or clarify something, no code changes',
+      DIAGNOSE: 'investigate or diagnose a problem', DISCUSS: 'continue a discussion',
+      PLAN: 'prepare a plan or architecture, no code', DOCS: 'write or update documentation',
+      FIX: 'fix a bug or error', IMPLEMENT: 'implement a feature, refactor or write code',
+      DEPLOY: 'deploy or release to production',
+    },
+  },
+  route: {
+    type: 'choice',
+    instructions: 'How large is the change?',
+    criteria: {
+      light: '1-3 files: typo, rename, add an import', medium: '3-10 files: new feature, refactoring, bug fix',
+      heavy: '10+ files: architecture change, new system, large refactoring',
+      decompose: 'too large for one task, must be split into subtasks',
+    },
+  },
+  allow_code: { type: 'noul', instructions: 'Completing the task requires writing or changing code (the user did not ask for "no code" / "only a plan").' },
+  full_cycle: { type: 'noul', instructions: 'The task is complex or risky enough to need full discovery, design and impact analysis before coding.' },
+  agent_research: { type: 'noul', instructions: 'The task needs research of documentation or best practices.' },
+  agent_implementation: { type: 'noul', instructions: 'The task needs writing code.' },
+  agent_architecture: { type: 'noul', instructions: 'The task involves architecture or system design decisions.' },
+  agent_security: { type: 'noul', instructions: 'The task touches authentication, permissions, secrets or sensitive data.' },
+  agent_testing: { type: 'noul', instructions: 'The task needs tests or QA.' },
+  agent_performance: { type: 'noul', instructions: 'The task is about performance optimization or metrics.' },
+  ...Object.fromEntries(Object.entries(PATTERN_QUESTIONS).map(([id, text]) =>
+    [`pattern_${id}`, { type: 'noul', instructions: text } as JevQuestion])),
+};
+
+
+/** Fork: free-form models drift on enum case and omit fields — normalise before strict validation. */
+function coerceClassified(raw: any): unknown {
+  const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T => {
+    const v = String(value ?? '').trim();
+    return allowed.find(a => a.toLowerCase() === v.toLowerCase()) ?? fallback;
+  };
+  const list = <T extends string>(value: unknown, allowed: readonly T[]): T[] =>
+    (Array.isArray(value) ? value : []).map(v => allowed.find(a => a.toLowerCase() === String(v).toLowerCase()))
+      .filter((v): v is T => Boolean(v));
+  const intent = pick(raw?.intent, Object.keys(INTENT_PHASE) as Intent[], 'EXPLAIN');
+  const route = pick(raw?.route, ['light', 'medium', 'heavy', 'decompose'] as const, 'medium');
+  const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : d);
+  return {
+    intent,
+    phase: pick(raw?.phase, ['DISCOVERY', 'PLANNING', 'IMPLEMENTATION', 'DEPLOYMENT'] as const, INTENT_PHASE[intent]),
+    route,
+    confidence: Math.min(1, num(raw?.confidence, 0.5)),
+    reasoning: String(raw?.reasoning ?? ''),
+    allowCode: typeof raw?.allowCode === 'boolean' ? raw.allowCode : ['FIX', 'IMPLEMENT', 'DEPLOY'].includes(intent),
+    suggestedAgents: list(raw?.suggestedAgents, AGENT_TYPES),
+    estimatedFiles: Math.round(num(raw?.estimatedFiles, ROUTE_ESTIMATES[route].files)),
+    estimatedMinutes: Math.round(num(raw?.estimatedMinutes, ROUTE_ESTIMATES[route].minutes)),
+    risks: Array.isArray(raw?.risks) ? raw.risks.map(String) : [],
+    requiresFullCycle: typeof raw?.requiresFullCycle === 'boolean' ? raw.requiresFullCycle : route !== 'light',
+    patternsToScan: list(raw?.patternsToScan, AVAILABLE_PATTERNS),
+    fileExtensions: Array.isArray(raw?.fileExtensions) ? raw.fileExtensions.map(String) : [],
+  };
+}
+
+// ============================================
 // CLASSIFIER CLASS
 // ============================================
 
 export class IntentClassifier {
-  private openai: OpenAI;
-  private model: string = 'gpt-4o-mini';
+  /**
+   * Классифицировать задачу: jev → opencode → default
+   */
+  async classify(taskDescription: string): Promise<ClassifiedIntent> {
+    const mode = (process.env.M7_CLASSIFIER || 'jev').toLowerCase();
+    const startTime = Date.now();
+    if (mode === 'off') return this.getDefaultIntent('Classifier disabled (M7_CLASSIFIER=off)');
 
-  constructor(apiKey?: string) {
-    this.openai = new OpenAI({
-      apiKey: apiKey || process.env.OPENAI_API_KEY,
-      maxRetries: 2,
-      timeout: 30000, // 30 seconds
+    if (mode === 'jev') {
+      try {
+        const result = await this.classifyWithJev(taskDescription);
+        log.debug(`IntentClassifier] jev ${Date.now() - startTime}ms: intent=${result.intent}, route=${result.route}`);
+        return result;
+      } catch (error: any) {
+        log.debug(`IntentClassifier] jev failed: ${error.message} — falling back to opencode`);
+      }
+    }
+
+    try {
+      const result = await this.classifyWithOpencode(taskDescription);
+      log.debug(`IntentClassifier] opencode ${Date.now() - startTime}ms: intent=${result.intent}, route=${result.route}`);
+      return result;
+    } catch (error: any) {
+      log.debug(`IntentClassifier] opencode failed: ${error.message}`);
+      return this.getDefaultIntent(error.message);
+    }
+  }
+
+  private async classifyWithJev(taskDescription: string): Promise<ClassifiedIntent> {
+    const answers = await askJev(`Developer task for a coding agent: ${taskDescription}`, JEV_QUESTIONS);
+    const intentProbs = answers.intent as Record<string, number>;
+    const routeProbs = answers.route as Record<string, number>;
+    const [intent, intentP] = argmax(intentProbs);
+    const [route] = argmax(routeProbs);
+    const yes = (q: string) => (answers[q] as number) >= JEV_THRESHOLD;
+
+    const suggestedAgents = AGENT_TYPES.filter(a => yes(`agent_${a}`));
+    const patternsToScan = AVAILABLE_PATTERNS.filter(p => yes(`pattern_${p}`));
+    const fileExtensions = [...new Set(patternsToScan.flatMap(p => PATTERN_EXTENSIONS[p]))];
+    const allowCode = yes('allow_code');
+    const requiresFullCycle = yes('full_cycle') || route === 'heavy' || route === 'decompose';
+    const risks: string[] = [];
+    if (yes('agent_security')) risks.push('Затрагивает авторизацию, права или чувствительные данные');
+    if (route === 'heavy' || route === 'decompose') risks.push('Крупное изменение: высокий риск регрессий');
+    if (intent === 'DEPLOY') risks.push('Изменение продакшена');
+    if (intentP < 0.6) risks.push('Неуверенная классификация интента');
+
+    const top = Object.entries(intentProbs).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`).join(', ');
+    return ClassifiedIntentSchema.parse({
+      intent,
+      phase: INTENT_PHASE[intent as Intent],
+      route,
+      confidence: intentP,
+      reasoning: `jev: ${top}; route ${route}`,
+      allowCode,
+      suggestedAgents: suggestedAgents.length ? suggestedAgents : ['research'],
+      estimatedFiles: ROUTE_ESTIMATES[route as Route].files,
+      estimatedMinutes: ROUTE_ESTIMATES[route as Route].minutes,
+      risks,
+      requiresFullCycle,
+      patternsToScan,
+      fileExtensions,
     });
   }
 
-  /**
-   * Классифицировать задачу через LLM
-   */
-  async classify(taskDescription: string): Promise<ClassifiedIntent> {
-    const startTime = Date.now();
-    
-    try {
-      log.debug(`IntentClassifier] Classifying: "${taskDescription.slice(0, 50)}..."`);
-      
-      const completion = await this.openai.chat.completions.parse({
-        model: this.model,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: taskDescription }
-        ],
-        response_format: zodResponseFormat(ClassifiedIntentSchema, 'intent_classification'),
-        temperature: 0.1, // Низкая температура для консистентности
-        max_tokens: 500,
-      });
-
-      const latency = Date.now() - startTime;
-      const message = completion.choices[0]?.message;
-      
-      if (message?.parsed) {
-        log.debug(`IntentClassifier] ✅ Classified in ${latency}ms: intent=${message.parsed.intent}, route=${message.parsed.route}, confidence=${(message.parsed.confidence * 100).toFixed(0)}%`);
-        return message.parsed;
-      }
-      
-      if (message?.refusal) {
-        log.debug(`IntentClassifier] ⚠️ Model refused: ${message.refusal}`);
-        return this.getDefaultIntent('Model refused to classify');
-      }
-
-      log.debug(`IntentClassifier] ⚠️ No parsed response, using default`);
-      return this.getDefaultIntent('No parsed response from model');
-      
-    } catch (error: any) {
-      const latency = Date.now() - startTime;
-      log.debug(`IntentClassifier] ❌ Error after ${latency}ms: ${error.message}`);
-      return this.getDefaultIntent(error.message);
-    }
+  private async classifyWithOpencode(taskDescription: string): Promise<ClassifiedIntent> {
+    const result = await completeForRole({
+      role: 'classifier',
+      system: `${SYSTEM_PROMPT}\n\nВерни ТОЛЬКО JSON-объект со всеми полями: intent, phase, route, confidence, reasoning, allowCode, suggestedAgents, estimatedFiles, estimatedMinutes, risks, requiresFullCycle, patternsToScan, fileExtensions. Без пояснений.`,
+      prompt: `Задача: ${taskDescription}`,
+      timeoutMs: 60_000,
+    });
+    const parsed = robustParse<unknown>(result.text);
+    if (!parsed.success) throw new Error(`classifier returned non-JSON: ${result.text.slice(0, 120)}`);
+    return ClassifiedIntentSchema.parse(coerceClassified(parsed.data));
   }
 
   /**

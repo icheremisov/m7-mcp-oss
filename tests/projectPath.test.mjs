@@ -108,6 +108,13 @@ markRootsResolutionComplete();
 const prevCwd = process.cwd();
 process.chdir(home);
 try {
+  // Fork: the scan is opt-in, and without it the home directory is never handed out
+  delete process.env.M7_CURSOR_PROJECTS_SCAN;
+  const unscanned = getProjectPath();
+  assert.notEqual(unscanned, scanProject, 'Cursor projects dir must not be scanned without M7_CURSOR_PROJECTS_SCAN');
+  assert.notEqual(unscanned, home, 'home directory must never be the project path');
+  clearProjectPathCache();
+  process.env.M7_CURSOR_PROJECTS_SCAN = 'true';
   const scannedPath = getProjectPath();
   assert.equal(
     scannedPath,
@@ -129,6 +136,7 @@ const emptySlugDir = join(emptyProjectsRoot, emptySlug);
 mkdirSync(join(emptySlugDir, 'agent-transcripts'), { recursive: true });
 writeFileSync(join(emptySlugDir, 'agent-transcripts', 'session.jsonl'), '{"event":"new-project"}\n');
 process.env.CURSOR_PROJECTS_DIR = emptyProjectsRoot;
+process.env.M7_CURSOR_PROJECTS_SCAN = 'true';
 clearProjectPathCache();
 markRootsResolutionComplete();
 const prevCwdEmpty = process.cwd();

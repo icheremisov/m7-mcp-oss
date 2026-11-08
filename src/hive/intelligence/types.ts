@@ -10,8 +10,7 @@
 // ============================================================================
 
 /**
- * Domain categories for model specialization
- * Based on LiveBench benchmark categories
+ * Domain categories describing an agent's specialization
  */
 export type AgentDomain = 
   | 'reasoning'      // Complex analysis, logic
@@ -71,58 +70,20 @@ export interface ArchitectResponse {
 // ============================================================================
 
 /**
- * Model benchmark scores by category
- */
-export interface ModelScores {
-  global: number;
-  reasoning: number;
-  coding: number;
-  math: number;
-  data: number;
-  language: number;
-  // Extended scores (not from LiveBench, estimated)
-  security?: number;
-  architecture?: number;
-}
-
-/**
- * Model benchmark entry
- */
-export interface ModelBenchmark {
-  /** Model identifier */
-  model: string;
-  
-  /** Provider */
-  provider: 'openai' | 'anthropic';
-  
-  /** Model tier */
-  tier: 'flagship' | 'standard' | 'economy' | 'specialized';
-  
-  /** Benchmark scores */
-  scores: ModelScores;
-  
-  /** API model name (may differ from display name) */
-  apiName?: string;
-}
-
-/**
  * Result of model selection
  */
 export interface ModelSelection {
-  /** Selected model */
+  /** Selected model spec (opencode "provider/model[@variant]") */
   model: string;
   
-  /** Provider */
-  provider: 'openai' | 'anthropic';
+  /** Provider prefix of the model spec (e.g. "opencode-go") */
+  provider: string;
   
-  /** Score for the selected domain */
-  score: number;
+  /** Index among experts in the resolved model table (role "expert") */
+  expertIndex: number;
   
   /** Reasoning for selection */
   reasoning: string;
-  
-  /** Alternative models considered */
-  alternatives?: Array<{ model: string; score: number }>;
 }
 
 // ============================================================================
@@ -148,8 +109,8 @@ export interface ExecutionLog {
   /** Model used */
   model: string;
   
-  /** Provider */
-  provider: 'openai' | 'anthropic';
+  /** Provider prefix of the model spec (e.g. "opencode-go") */
+  provider: string;
   
   /** Response content (truncated for storage) */
   responsePreview: string;
@@ -218,8 +179,11 @@ export interface DynamicAgentProposal {
   /** Model used */
   model: string;
   
-  /** Provider */
-  provider: 'openai' | 'anthropic';
+  /** Provider prefix of the model spec (e.g. "opencode-go") */
+  provider: string;
+  
+  /** Expert index used to resolve the model (reused for debate refinement) */
+  expertIndex?: number;
   
   /** Main proposal content */
   proposal: string;
@@ -318,25 +282,4 @@ export interface DynamicHiveResult {
   
   /** Error if failed */
   error?: string;
-}
-
-// ============================================================================
-// BENCHMARK DATA TYPES
-// ============================================================================
-
-/**
- * LiveBench baseline data structure
- */
-export interface BenchmarkBaseline {
-  /** Version of LiveBench data */
-  version: string;
-  
-  /** Source URL */
-  source: string;
-  
-  /** Last updated */
-  lastUpdated: string;
-  
-  /** Model benchmarks */
-  models: ModelBenchmark[];
 }

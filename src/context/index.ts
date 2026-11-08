@@ -5,10 +5,8 @@
  */
 
 export * from './types.js';
-export * from './model-cache.js';
 export { 
   ContextProvider, 
   getContextProvider, 
   resetContextProvider 
 } from './context-provider.js';
-

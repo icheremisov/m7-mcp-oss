@@ -16,8 +16,9 @@ cd "$(dirname "$0")/.."
 
 TIMEOUT="${1:-120}"
 export CURSOR_WORKSPACE="${CURSOR_WORKSPACE:-$PWD}"
-export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-test-placeholder}"
-export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-sk-ant-test-placeholder}"
+# Fork: no network LLM calls from tests (jev / opencode)
+export M7_CLASSIFIER="${M7_CLASSIFIER:-off}"
+export M7_OPENCODE_BIN="${M7_OPENCODE_BIN:-/nonexistent/opencode}"
 
 pass=0; fail=0; failed=()
 marker="$(mktemp "${TMPDIR:-/tmp}/m7-test-start.XXXXXX")"

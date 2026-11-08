@@ -23,6 +23,14 @@ export interface ModelLimits {
 }
 
 export const MODEL_LIMITS: Record<string, ModelLimits> = {
+  // opencode model specs ("opencode/…", "opencode-go/…"), matched by prefix.
+  // Conservative common floor across the preset models.
+  'opencode': {
+    model: 'opencode',
+    maxContextTokens: 128000,
+    maxOutputTokens: 16384,
+    safeInputLimit: 100000,
+  },
   // Anthropic flagship — Claude Opus 4.6 (Feb 2026, 200K/1M beta)
   'claude-opus-4-6': {
     model: 'claude-opus-4-6',

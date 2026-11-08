@@ -22,24 +22,12 @@ export interface DebateConfig {
   
   /** Budget cap as multiplier of initial proposal cost. 2.0 = up to 2x proposal cost for debate. */
   budgetCapMultiplier: number;
-  
-  /** Model for critique calls (economy recommended) */
-  critiqueModel: string;
-  
-  /** Model for refinement calls (economy recommended) */
-  refineModel: string;
-  
-  /** Model for convergence checks */
-  convergenceModel: string;
 }
 
 export const DEFAULT_DEBATE_CONFIG: DebateConfig = {
   maxRounds: 3,
   convergenceThreshold: 0.8,
   budgetCapMultiplier: 3.0,
-  critiqueModel: 'claude-opus-4-6',                // Flagship Anthropic — Opus 4.7 not yet broadly available
-  refineModel: 'gpt-5.5',                          // Flagship OpenAI — GPQA 93.6%, ARC-AGI 85%
-  convergenceModel: 'claude-opus-4-6',             // Flagship — best available reasoning
 };
 
 // ============================================================================

@@ -12,73 +12,43 @@ export interface CurrentContext {
   timestamp: string;
   /** Human-readable formatted time */
   formattedTime: string;
-  /** Available AI models from APIs */
+  /** Models M7 currently uses per role (opencode adapter) */
   models: AvailableModels;
   /** Pre-built Markdown header for injection */
   header: string;
 }
 
 /**
- * Available models from AI providers
+ * Current role → model table of the opencode adapter (src/llm), no network involved
  */
 export interface AvailableModels {
-  openai: ModelInfo[];
-  anthropic: ModelInfo[];
-  /** ISO timestamp of last update */
+  /** One entry per role (experts are listed individually as expert[0], expert[1], ...) */
+  roles: ModelInfo[];
+  /** ISO timestamp when the table was resolved */
   lastUpdated: string;
 }
 
 /**
- * Model information
+ * Model assigned to a role
  */
 export interface ModelInfo {
-  /** Model ID (e.g., "gpt-5.2", "claude-opus-4-5") */
+  /** opencode model spec, e.g. "opencode-go/deepseek-v4.1-flash" or "...@high" */
   id: string;
-  /** Display name */
+  /** Role label, e.g. "architect", "expert[1]" */
   name: string;
-  /** Creation timestamp (optional) */
-  created?: number;
 }
 
 /**
  * Context Provider configuration
  */
 export interface ContextProviderConfig {
-  /** Cache TTL in milliseconds (default: 24 hours) */
-  cacheTtlMs: number;
-  /** API timeout in milliseconds (default: 5000) */
-  timeout: number;
-  /** Fallback models when APIs unavailable */
-  fallbackModels: AvailableModels;
   /** Enable context injection */
   enabled: boolean;
 }
 
 /**
- * Default fallback models (as of January 2026)
- */
-export const DEFAULT_FALLBACK_MODELS: AvailableModels = {
-  openai: [
-    { id: 'gpt-5.2', name: 'GPT-5.2' },
-    { id: 'gpt-5', name: 'GPT-5' },
-    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
-    { id: 'gpt-4o', name: 'GPT-4o' },
-  ],
-  anthropic: [
-    { id: 'claude-opus-4-5', name: 'Claude Opus 4.5' },
-    { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
-    { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
-  ],
-  lastUpdated: 'fallback',
-};
-
-/**
  * Default configuration
  */
 export const DEFAULT_CONTEXT_CONFIG: ContextProviderConfig = {
-  cacheTtlMs: 24 * 60 * 60 * 1000, // 24 hours
-  timeout: 5000, // 5 seconds
-  fallbackModels: DEFAULT_FALLBACK_MODELS,
   enabled: true,
 };
-

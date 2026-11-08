@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import dotenv from 'dotenv';
-dotenv.config({ quiet: true });
+// Fork: no dotenv — a .env in an untrusted cwd must not be able to configure the server.
+// All settings come from the MCP client config (env block).
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -102,7 +102,6 @@ import { impactTool } from './core/tools/critical/impact.js';
 
 // Import Hive Multiagent System
 import { hiveCoordinatorTool } from './hive/tools/hiveCoordinator.js';
-import { APIManager } from './hive/api/apiManager.js';
 
 // Import Knowledge Hub
 import { knowledgeHubTool } from './core/tools/knowledgeHub/knowledgeHubTool.js';
@@ -126,6 +125,7 @@ import { meshTool } from './mesh/tools/meshTool.js';
 // Codex Martianus tools
 import { repentanceTool } from './core/tools/repentanceTool.js';
 import { litanyTool } from './core/tools/litanyTool.js';
+import { modelsTool } from './core/tools/modelsTool.js';
 
 // Factory tools
 import { createDevOpsTool } from './core/tools/devopsTool.js';
@@ -151,7 +151,6 @@ class M7MCPServer {
   private orchestrator: TaskOrchestrator;
   private scopeGuard: ScopeGuard;
   private schema: SchemaSystem;
-  private apiManager: APIManager;
   private tsiSystem: TSISystem;
   private projectPath: string;
   private registeredToolNames: string[] = [];
@@ -194,7 +193,6 @@ class M7MCPServer {
     this.orchestrator = new TaskOrchestrator(this.journal);
     registerShutdownContributor(() => this.orchestrator.flushPersist());
     this.scopeGuard = new ScopeGuard(this.orchestrator, this.journal);
-    this.apiManager = this.initializeAPIManager();
     
     // Initialize TSI System
     this.tsiSystem = new TSISystem();
@@ -221,27 +219,6 @@ class M7MCPServer {
     
     // Initialize TSI System asynchronously after registration
     this.initializeTSI().catch(err => log('[TSI Init Error]', err));
-  }
-
-  private initializeAPIManager(): APIManager {
-    log('🔧 [M7 Server] Initializing singleton APIManager...');
-    const openaiKey = process.env.OPENAI_API_KEY;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-    
-    if (!openaiKey) {
-      throw new Error('❌ [M7 Server] OPENAI_API_KEY environment variable is required');
-    }
-    if (!anthropicKey) {
-      throw new Error('❌ [M7 Server] ANTHROPIC_API_KEY environment variable is required');
-    }
-    
-    log(`🔑 [M7 Server] Loading API Keys:`);
-    log('  OPENAI_API_KEY: set');
-    log('  ANTHROPIC_API_KEY: set');
-    
-    const manager = new APIManager({ openai: openaiKey, anthropic: anthropicKey });
-    log('✅ [M7 Server] Singleton APIManager created successfully');
-    return manager;
   }
 
   private async initializeTSI() {
@@ -445,7 +422,7 @@ class M7MCPServer {
     log('🔍 [M7 DEBUG] About to register Hive Coordinator Tool...');
     try {
       this.registerTool(hiveCoordinatorTool, (request: any) => 
-        hiveCoordinatorTool.handler(request, this.journal, this.apiManager));
+        hiveCoordinatorTool.handler(request, this.journal));
       log('✅ [M7 DEBUG] Hive Coordinator Tool registered successfully!');
     } catch (error: any) {
       log('❌ [M7 DEBUG] Hive Coordinator Tool registration failed:', error.message);
@@ -613,6 +590,8 @@ class M7MCPServer {
 
     // 36. Repentance Tool (Litany of Unbinding)
     try {
+      this.registerTool(modelsTool, (request: any) => modelsTool.handler(request));
+      log('✅ [M7 DEBUG] modelsTool registered');
       this.registerTool(repentanceTool, (request: any) => repentanceTool.handler(request));
       log('✅ [M7 DEBUG] repentanceTool registered');
     } catch (error: any) {

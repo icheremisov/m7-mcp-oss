@@ -7,7 +7,7 @@ import * as path from 'path';
 import { HiveOrchestrator } from '../orchestrator/hiveOrchestrator.js';
 import { DynamicHiveOrchestrator } from '../orchestrator/dynamicOrchestrator.js';
 import { PlannerOrchestrator } from '../orchestrator/plannerOrchestrator.js';
-import { APIManager } from '../api/apiManager.js';
+import { resolveModels, ModelOverrides, ModelAssignment } from '../../llm/index.js';
 import { HiveTask, HiveMode } from '../types/task.js';
 import { DynamicHiveResult } from '../intelligence/types.js';
 import { PlannerResult } from '../planner/types.js';
@@ -93,8 +93,44 @@ const HiveCoordinatorRequestSchema = z.object({
     auctionTimeoutMs: z.number().optional().describe('Auction timeout in ms (default: 5000)'),
     gatekeepers: z.array(z.enum(['style', 'arch', 'security', 'test'])).optional().describe('Gatekeepers to enable'),
     parallelAuctions: z.boolean().optional().describe('Run auctions in parallel (default: true)')
-  }).optional().describe('Options for planned mode (v3.8.0+)')
+  }).optional().describe('Options for planned mode (v3.8.0+)'),
+  preset: z.enum(['free', 'cheap', 'strong']).optional().describe(
+    'Model preset for all roles: "free" (zero-retention free opencode models), "cheap" (OpenCode Go, default), ' +
+    '"strong" (strongest models, low request limits). Defaults to M7_MODEL_PRESET or "cheap". See mcp_m7_models.'
+  ),
+  models: z.object({
+    architect: z.string().optional().describe('Model that designs the expert team (dynamic/planned modes)'),
+    planner: z.string().optional().describe('Model that decomposes the goal into subtasks (planned mode)'),
+    synthesizer: z.string().optional().describe('Model that merges expert proposals into the final answer (dynamic mode)'),
+    critic: z.string().optional().describe('Model for debate critiques and convergence checks (dynamic mode)'),
+    executor: z.string().optional().describe('Model that executes awarded subtasks (planned mode)'),
+    experts: z.array(z.string()).optional().describe(
+      'Expert models; agent i uses experts[i % length], so list different model families for diverse opinions'
+    )
+  }).optional().describe(
+    'Per-role model overrides on top of the preset. Each value is an opencode model spec "provider/model" ' +
+    'from `opencode models` (e.g. "opencode-go/deepseek-v4.1-flash"), optionally with a reasoning variant ' +
+    'suffix "@variant" (e.g. "opencode-go/claude-haiku-5-5@high"). See mcp_m7_models for the current table.'
+  )
 });
+
+/** Build adapter overrides from tool arguments (preset + per-role models). */
+function buildOverrides(request: any): ModelOverrides {
+  const overrides: ModelOverrides = { ...(request.models ?? {}) };
+  if (request.preset) overrides.preset = request.preset;
+  return overrides;
+}
+
+/** Markdown block listing which model each role resolved to for this run. */
+function formatModelsUsed(models: ModelAssignment, mode: HiveMode): string {
+  const roles: Array<[string, string]> =
+    mode === 'dynamic'
+      ? [['architect', models.architect], ['experts', models.experts.join(', ')], ['critic', models.critic], ['synthesizer', models.synthesizer]]
+      : mode === 'planned'
+        ? [['planner', models.planner], ['architect', models.architect], ['executor', models.executor]]
+        : [['experts', models.experts.join(', ')]];
+  return `\n---\n\n## 🤖 Models Used\n\n${roles.map(([role, model]) => `- **${role}**: \`${model}\``).join('\n')}\n`;
+}
 
 export const hiveCoordinatorTool = {
   name: 'mcp_m7_hive_coordinator',
@@ -103,8 +139,9 @@ export const hiveCoordinatorTool = {
 v3.8.0 Features:
 - DYNAMIC MODE (default): AI creates optimal expert team for each task
 - PLANNED MODE (new): CNP auction-based coordination with task decomposition
-- MODEL SELECTION: Best model chosen per agent based on LiveBench benchmarks
-- SELF-LEARNING: System improves over time based on results
+- MODELS: all LLM calls go through the local opencode CLI; models per role come from a preset
+  ("free" | "cheap" | "strong", default "cheap") plus optional per-role overrides (see mcp_m7_models).
+  Experts are spread across different model families.
 - GATEKEEPERS: Style, Architecture, Security validation
 
 Use mode="dynamic" for quick expert analysis (default).
@@ -114,10 +151,11 @@ Use mode="fixed" for legacy behavior with predefined agents.`,
   
   handler: async (
     request: any,
-    journal: JournalSystem,
-    apiManager: APIManager
+    journal: JournalSystem
   ) => {
     const mode: HiveMode = request.mode || 'dynamic';
+    const overrides = buildOverrides(request);
+    const modelsUsed = formatModelsUsed(resolveModels(overrides), mode);
     log.debug(`🚀 [MCP Hive] Handler called in ${mode.toUpperCase()} mode`);
     log.debug('📋 [MCP Hive] Task:', request.task.substring(0, 100));
     
@@ -146,33 +184,9 @@ Use mode="fixed" for legacy behavior with predefined agents.`,
         log.debug(`⚠️ [MCP Hive] Context injection skipped: ${e.message}`);
       }
       
-      // v8.0: Mesh Context Injection — tell Hive about other M7 instances
-      let meshContextBlock = '';
-      try {
-        const { getMeshManager } = await import('../../mesh/MeshManager.js');
-        const mesh = getMeshManager();
-        if (mesh.isActive()) {
-          const peerContexts = mesh.getAllPeerContexts();
-          if (peerContexts.length > 0) {
-            const peerLines = peerContexts.map(p => {
-              const ctxSummary = p.contexts.slice(0, 3).map(c => 
-                `    [${c.context_type}] ${c.content.slice(0, 150)}`
-              ).join('\n');
-              return `  - Instance ${p.instance_id.slice(0, 12)}... (PID ${p.pid})\n` +
-                `    Role: ${p.server_role || 'none'} | Project: ${p.project_root}\n` +
-                (ctxSummary ? `${ctxSummary}` : '    (no context published)');
-            }).join('\n');
-            meshContextBlock = `\n\n--- MESH CONTEXT: ${peerContexts.length} other M7 instance(s) active ---\n${peerLines}\n--- END MESH CONTEXT ---`;
-            log.debug(`🔗 [MCP Hive] Injected mesh context from ${peerContexts.length} peer(s)`);
-          }
-        }
-      } catch {
-        // Mesh not available or not initialized — skip silently
-      }
-
       const taskId = generateSemanticTaskId(request.task);
       const enrichedTaskDescription = enrichedContext && enrichedContext.relevantChunks.length > 0
-        ? `${request.task}${meshContextBlock}
+        ? `${request.task}
 
 --- PROJECT CONTEXT (Auto-Injected) ---
 Project: ${enrichedContext.projectInfo.name}
@@ -183,7 +197,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
   `// ${chunk.source}\n${chunk.content.slice(0, 300)}...`
 ).join('\n\n')}
 --- END PROJECT CONTEXT ---`
-        : request.task + meshContextBlock;
+        : request.task;
       
       // ===============================================
       // DYNAMIC MODE (v3.7.0+) - Default
@@ -191,21 +205,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
       if (mode === 'dynamic') {
         log.debug('🧬 [MCP Hive] Using DYNAMIC orchestrator with AI-generated team');
         
-        // Get API keys from environment (same source as APIManager uses)
-        const openaiKey = process.env.OPENAI_API_KEY || '';
-        const anthropicKey = process.env.ANTHROPIC_API_KEY || '';
-        
-        log.debug(`🔑 [MCP Hive] OpenAI key: ${openaiKey ? 'present' : 'MISSING'}`);
-        log.debug(`🔑 [MCP Hive] Anthropic key: ${anthropicKey ? 'present' : 'MISSING'}`);
-        
-        if (!anthropicKey) {
-          log.debug('⚠️ [MCP Hive] ANTHROPIC_API_KEY not set, Architect will use fallback');
-        }
-        
-        const dynamicOrchestrator = new DynamicHiveOrchestrator(
-          { openai: openaiKey, anthropic: anthropicKey },
-          journal
-        );
+        const dynamicOrchestrator = new DynamicHiveOrchestrator(journal, overrides);
         
         const hiveTask: HiveTask = {
           id: taskId,
@@ -227,15 +227,13 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
 
 ## 🔧 Debug Info
 
-- OpenAI Key: ${openaiKey ? '✅ Present' : '❌ MISSING'}
-- Anthropic Key: ${anthropicKey ? '✅ Present' : '❌ MISSING'}
 - Architect Latency: ${result.metrics.architectLatencyMs}ms
 - Team Size: ${result.team.length}
 - Is Fallback: ${result.team.some(a => a.role === 'Strategic Analyst') ? 'YES (fallback team)' : 'NO (dynamic team)'}
 `;
         
         // v7.2: Save full report to file, return compact summary to chat
-        const fullReport = formatDynamicHiveResponse(result) + debugInfo;
+        const fullReport = formatDynamicHiveResponse(result) + modelsUsed + debugInfo;
         const savedPath = saveHiveReport(taskId, request.task, fullReport);
         
         // Return compact summary (~3-5KB) so user can actually SEE it in Cursor chat
@@ -245,7 +243,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
           content: [
             {
               type: 'text',
-              text: compactSummary
+              text: compactSummary + modelsUsed
             }
           ]
         };
@@ -259,14 +257,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
         log.debug(`📋 [MCP Hive] Task: ${request.task.substring(0, 100)}`);
         log.debug(`📋 [MCP Hive] Options: ${JSON.stringify(request.plannerOptions)}`);
         
-        const openaiKey = process.env.OPENAI_API_KEY || '';
-        const anthropicKey = process.env.ANTHROPIC_API_KEY || '';
-        
-        log.debug(`🔑 [MCP Hive] OpenAI key: ${openaiKey ? 'present' : 'MISSING'}`);
-        log.debug(`🔑 [MCP Hive] Anthropic key: ${anthropicKey ? 'present' : 'MISSING'}`);
-        
         const plannerOrchestrator = new PlannerOrchestrator(
-          { openai: openaiKey, anthropic: anthropicKey },
           journal,
           {
             maxSubtasks: request.plannerOptions?.maxSubtasks,
@@ -277,7 +268,8 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
               enabled: true,
               blocking: g === 'security'
             }))
-          }
+          },
+          overrides
         );
         
         const hiveTask: HiveTask = {
@@ -297,7 +289,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
         log.debug(`✅ [MCP Hive] Planned coordination complete: ${result.tasks.length} tasks, ${result.results.length} executed, success=${result.success}`);
         
         // v7.1: Save report to docs/hive/
-        const plannedReport = formatPlannerResponse(result);
+        const plannedReport = formatPlannerResponse(result) + modelsUsed;
         const plannedPath = saveHiveReport(taskId, request.task, plannedReport);
         const plannedNote = plannedPath 
           ? `\n---\n📄 **Report saved**: \`${plannedPath}\`` 
@@ -318,7 +310,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
       // ===============================================
       log.debug('📦 [MCP Hive] Using FIXED orchestrator with predefined agents');
       
-      const orchestrator = new HiveOrchestrator(apiManager, journal);
+      const orchestrator = new HiveOrchestrator(journal, overrides);
       
       const hiveTask: HiveTask = {
         id: taskId,
@@ -336,7 +328,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
       log.debug(`✅ [MCP Hive] Fixed coordination complete: ${result.agents_used.join(', ')}`);
       
       // v7.1: Save report to docs/hive/
-      const fixedReport = formatHiveResponse(result);
+      const fixedReport = formatHiveResponse(result) + modelsUsed;
       const fixedPath = saveHiveReport(taskId, request.task, fixedReport);
       const fixedNote = fixedPath 
         ? `\n---\n📄 **Report saved**: \`${fixedPath}\`` 
@@ -367,7 +359,7 @@ ${enrichedContext.relevantChunks.slice(0, 3).map(chunk =>
 **Stack**: ${error.stack}
 
 ---
-💡 Verify OpenAI and Anthropic API keys are valid
+💡 Check that the opencode CLI is installed and authenticated, and that the requested models exist (opencode models, mcp_m7_models)
 📌 Try mode="fixed" if dynamic mode fails
 
 **MCP Integration Debug**: This error occurred in the MCP tool handler`

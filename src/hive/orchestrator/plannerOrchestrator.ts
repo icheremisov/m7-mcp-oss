@@ -8,10 +8,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
 import { HiveTask } from '../types/task.js';
-import { APIConfig } from '../types/api.js';
+import { completeForRole, ModelOverrides } from '../../llm/index.js';
 import { JournalSystem } from '../../journal/journalSystem.js';
 import { getProjectPath } from '../../core/utils/projectPath.js';
 import { createLogger } from '../../core/utils/logger.js';
@@ -19,7 +17,6 @@ import { createLogger } from '../../core/utils/logger.js';
 import { getMemoryCore, UnifiedMemoryCore } from '../../memory/auto/unified-memory-core.js';
 
 const log = createLogger('[PlannerOrchestrator]');
-import { initializeClientPool, getOpenAI, getAnthropic, getClientPool } from '../api/clientPool.js';
 
 // Planner imports
 import {
@@ -36,7 +33,7 @@ import { AuctioneerSupervisor } from '../planner/auctioneerSupervisor.js';
 import { GatekeeperManager } from '../planner/gatekeepers.js';
 
 // Intelligence imports for agent generation
-import { HiveArchitect, ModelSelector, DynamicAgent, ModelSelection, ArchitectResponse } from '../intelligence/index.js';
+import { HiveArchitect, ModelSelector, DynamicAgent, ArchitectResponse } from '../intelligence/index.js';
 
 // Code context injection
 import { CodeContextInjector, CodeContext } from '../context/index.js';
@@ -50,17 +47,13 @@ import { getTaskResultCache, TaskResultCache } from '../cache/index.js';
 // Cross-Session Learning
 import { getCrossSessionLearning, CrossSessionLearning, RelevantKnowledge } from '../../cross-session/index.js';
 
-// Streaming execution
-import { executeWithSmartStreaming, StreamingResult } from '../streaming/index.js';
-
 /**
  * Planner Orchestrator
  * 
  * Executes tasks using CNP auction-based coordination.
  */
 export class PlannerOrchestrator {
-  private openaiClient: OpenAI;
-  private anthropicClient: Anthropic;
+  private overrides: ModelOverrides;
   private planner: PlannerAgent;
   private auctioneer: AuctioneerSupervisor;
   private gatekeepers: GatekeeperManager;
@@ -84,36 +77,25 @@ export class PlannerOrchestrator {
   private crossSessionLearning: CrossSessionLearning;
   
   constructor(
-    config: APIConfig,
     journal: JournalSystem,
-    options: Partial<PlannerOptions> = {}
+    options: Partial<PlannerOptions> = {},
+    overrides: ModelOverrides = {}
   ) {
     this.options = { ...DEFAULT_PLANNER_OPTIONS, ...options };
+    this.overrides = overrides;
     
-    // Initialize ClientPool singleton (first call initializes, subsequent calls update)
-    initializeClientPool({
-      openaiKey: config.openai,
-      anthropicKey: config.anthropic
-    });
-    
-    // Get pooled clients
-    this.openaiClient = getOpenAI('default');
-    this.anthropicClient = getAnthropic('default');
-    
-    // Sub-components will use ClientPool automatically
-    this.planner = new PlannerAgent();  // Uses pooled client
+    this.planner = new PlannerAgent(overrides);
     this.auctioneer = new AuctioneerSupervisor(this.options);
     this.gatekeepers = new GatekeeperManager(this.options.gatekeepers);
-    this.architect = new HiveArchitect();  // Uses pooled client
-    this.modelSelector = new ModelSelector();
+    this.architect = new HiveArchitect(overrides);
+    this.modelSelector = new ModelSelector(overrides);
     this.contextInjector = new CodeContextInjector(getProjectPath());
     this.agentMemory = getAgentMemory();  // Session-level memory
     this.taskCache = getTaskResultCache();  // Result caching
     this.crossSessionLearning = getCrossSessionLearning();  // Cross-Session Learning
     this.journal = journal;
     
-    const poolStats = getClientPool().getStats();
-    log.info(`[Planner Orchestrator] ✅ Initialized with ClientPool + AgentMemory + TaskCache`);
+    log.info(`[Planner Orchestrator] ✅ Initialized with AgentMemory + TaskCache`);
   }
   
   /**
@@ -402,7 +384,6 @@ export class PlannerOrchestrator {
   ): Promise<CNPResult> {
     
     const startTime = Date.now();
-    const agent = agents.find(a => a.id === award.winnerId);
     
     // Check cache for similar task result
     const cachedResult = this.taskCache.get(task.description, award.winnerRole);
@@ -462,38 +443,16 @@ If code context is provided, reference the actual code in your response.${memory
     const userPrompt = `## Task\n\n${task.description}${codeContextMarkdown}\n\n## Your Approach\n\n${award.winningBid.approach}\n\n## Instructions\n\nProvide your complete solution. Reference the actual code shown above when relevant.`;
     
     try {
-      // Execute with appropriate model using smart streaming
-      const modelSelection = this.modelSelector.selectModelsForTeam([{
-        id: award.winnerId,
-        role: award.winnerRole,
-        expertise: '',
-        focus: '',
-        perspective: '',
-        domain: agent?.capabilities[0]?.domain as any || 'general'
-      }]).get(award.winnerId);
+      const result = await completeForRole({
+        role: 'executor',
+        overrides: this.overrides,
+        system: systemPrompt,
+        prompt: userPrompt
+      });
+      log.debug(`Planner] Executed with ${result.model} in ${result.durationMs}ms`);
       
-      const provider = modelSelection?.provider || 'openai';
-      const model = modelSelection?.model || 'gpt-5.2-chat-latest';
-      
-      log.debug(`Planner] Executing with ${provider} model: ${model}`);
-      
-      // Use smart streaming for long tasks
-      const result = await executeWithSmartStreaming(
-        this.openaiClient,
-        this.anthropicClient,
-        provider as 'openai' | 'anthropic',
-        model,
-        systemPrompt,
-        userPrompt,
-        {
-          onProgress: (chunk, total) => {
-            // Progress is logged in streamingExecutor
-          }
-        }
-      );
-      
-      const output = result.output;
-      const tokens = result.tokens;
+      const output = result.text;
+      const tokens = result.tokens.total;
       
       const latencyMs = Date.now() - startTime;
       
@@ -691,9 +650,9 @@ If code context is provided, reference the actual code in your response.${memory
  * Create Planner Orchestrator instance (v5.0: no memory parameter)
  */
 export function createPlannerOrchestrator(
-  config: APIConfig,
   journal: JournalSystem,
-  options?: Partial<PlannerOptions>
+  options?: Partial<PlannerOptions>,
+  overrides: ModelOverrides = {}
 ): PlannerOrchestrator {
-  return new PlannerOrchestrator(config, journal, options);
+  return new PlannerOrchestrator(journal, options, overrides);
 }

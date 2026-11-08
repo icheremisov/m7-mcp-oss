@@ -40,9 +40,14 @@
     "mcp_m7_task_transfer",
     "mcp_m7_task_graph",
     "mcp_m7_repentance",
-    "mcp_m7_litany"
+    "mcp_m7_litany",
+    "mcp_m7_models"
   ],
-  "resources": ["memory", "patterns", "errors"],
+  "resources": [
+    "memory",
+    "patterns",
+    "errors"
+  ],
   "config": {
     "stdio": true,
     "env": {

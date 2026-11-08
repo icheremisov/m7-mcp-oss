@@ -309,7 +309,8 @@ describe('[HYG-4] tool surface and key hygiene', () => {
     });
   });
 
-  it('with M7_DEBUG on, stderr contains no 8-character piece of either API key', T, async () => {
+  // Fork: the server holds no API keys; instead check that debug output names no key env at all
+  it('with M7_DEBUG on, the server starts without any API key and logs none', T, async () => {
     await withServerProject('e2e-hyg4-keys-', async (dir, start) => {
       const s = await start({ env: { M7_DEBUG: 'true' } });
       await s.client.listTools();
@@ -317,7 +318,7 @@ describe('[HYG-4] tool surface and key hygiene', () => {
       await s.stop('SIGTERM');
       const stderr = s.stderr();
       assert.ok(stderr.length > 0, 'debug logging must be active for this check to mean anything');
-      assert.match(stderr, /OPENAI_API_KEY: set/);
+      assert.doesNotMatch(stderr, /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
       for (const key of Object.values(PLACEHOLDER_KEYS)) {
         for (let i = 0; i + 8 <= key.length; i++) {
           const piece = key.slice(i, i + 8);

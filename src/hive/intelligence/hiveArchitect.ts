@@ -1,49 +1,28 @@
 /**
  * M7 Hive v2.0 - Hive Architect
  * 
- * Uses Claude Opus 4.5 to dynamically generate optimal team of experts
- * for any given task. No fixed agent types - fully dynamic.
+ * Uses the "architect" role model (opencode adapter, src/llm) to dynamically
+ * generate an optimal team of experts for any given task. No fixed agent types.
  * 
  * @version 3.7.0
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 import { DynamicAgent, ArchitectResponse, AgentDomain } from './types.js';
 import { createLogger } from '../../core/utils/logger.js';
 const log = createLogger('[HiveArchitect]');
-import { getAnthropic, getClientPool } from '../api/clientPool.js';
+import { completeForRole, ModelOverrides } from '../../llm/index.js';
 // v5.1: Use robust JSON parser for LLM responses
 import { robustParse } from '../utils/json/index.js';
 
-// Architect uses Claude Opus 4.6 — Opus 4.7 not yet available via API for all tiers
-const ARCHITECT_MODEL = 'claude-opus-4-6';
+const JSON_ONLY = '\n\nReturn only the JSON, no prose before or after it.';
 const MIN_AGENTS = 2;
 
 /**
  * Hive Architect - Creates optimal team of experts for any task
- * 
- * Uses ClientPool for connection reuse.
  */
 export class HiveArchitect {
-  private client: Anthropic;
-  
-  constructor(anthropicKey?: string) {
-    // Use ClientPool if initialized, otherwise create direct client
-    if (getClientPool().isInitialized() && getClientPool().hasAnthropic()) {
-      this.client = getAnthropic('architect');
-      log.debug(`[Hive Architect] 🔄 Using pooled Anthropic client`);
-    } else if (anthropicKey) {
-      this.client = new Anthropic({
-        apiKey: anthropicKey,
-        maxRetries: 3,
-        timeout: 120000
-      });
-      log.debug(`[Hive Architect] 🔑 Created direct Anthropic client`);
-    } else {
-      throw new Error('Anthropic API key required when ClientPool not initialized');
-    }
-  }
+  constructor(private overrides: ModelOverrides = {}) {}
   
   /**
    * Create teams for multiple tasks in a single API call (batch mode)
@@ -69,17 +48,14 @@ export class HiveArchitect {
     try {
       const prompt = this.buildBatchPrompt(tasks);
       
-      const response = await this.client.messages.create({
-        model: ARCHITECT_MODEL,
-        max_tokens: 4000, // More tokens for batch
-        temperature: 0.3,
+      const response = await completeForRole({
+        role: 'architect',
+        overrides: this.overrides,
         system: this.getBatchSystemPrompt(),
-        messages: [
-          { role: 'user', content: prompt }
-        ]
+        prompt: prompt + JSON_ONLY
       });
       
-      const content = response.content[0].type === 'text' ? response.content[0].text : '';
+      const content = response.text;
       const parsed = this.parseBatchResponse(content, tasks);
       
       for (const [taskDesc, team] of parsed) {
@@ -224,17 +200,14 @@ Respond with valid JSON array:
     try {
       const prompt = this.buildArchitectPrompt(task, context);
       
-      const response = await this.client.messages.create({
-        model: ARCHITECT_MODEL,
-        max_tokens: 4096,
-        temperature: 0.3,  // Slightly creative but consistent
+      const response = await completeForRole({
+        role: 'architect',
+        overrides: this.overrides,
         system: this.getSystemPrompt(),
-        messages: [
-          { role: 'user', content: prompt }
-        ]
+        prompt: prompt + JSON_ONLY
       });
       
-      const content = response.content[0].type === 'text' ? response.content[0].text : '';
+      const content = response.text;
       const parsed = this.parseResponse(content);
       
       // Ensure minimum agents
@@ -252,13 +225,6 @@ Respond with valid JSON array:
     } catch (error: any) {
       // Use console.error for visibility in MCP logs
       log.debug(`[Hive Architect] ❌ Failed to create team: ${error.message}`);
-      log.debug(`[Hive Architect] ❌ Error type: ${error.constructor.name}`);
-      if (error.status) {
-        log.debug(`[Hive Architect] ❌ HTTP Status: ${error.status}`);
-      }
-      if (error.error) {
-        log.debug(`[Hive Architect] ❌ API Error:`, error.error);
-      }
       
       // Fallback to default team
       return this.createFallbackTeam(task);
@@ -500,6 +466,6 @@ Use the language of the task for role names when appropriate.`;
 /**
  * Create Hive Architect instance
  */
-export function createHiveArchitect(anthropicKey: string): HiveArchitect {
-  return new HiveArchitect(anthropicKey);
+export function createHiveArchitect(overrides: ModelOverrides = {}): HiveArchitect {
+  return new HiveArchitect(overrides);
 }
