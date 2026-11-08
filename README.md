@@ -1,3 +1,32 @@
+# M7 MCP — secure fork (opencode)
+
+Fork of [DukeDeSouth/m7-mcp-oss](https://github.com/DukeDeSouth/m7-mcp-oss) v3.22.2 with safer defaults and
+**no API keys**: every LLM call goes through the local [`opencode`](https://opencode.ai) CLI.
+Full change list and rationale: [docs/FORK.md](docs/FORK.md). Model choice with benchmark sources: [docs/MODELS.md](docs/MODELS.md).
+
+What is different from upstream:
+
+- **No silent writes into your repo.** `mcp_m7_analyze_task` no longer auto-initialises a project (that path
+  overwrote `README.md`, `INDEX.md`, `.cursorrules` …). `mcp_m7_init_project` only creates files that do not
+  exist yet and writes agent rule files (`.cursorrules`, `.cursor/rules/*`) only with `M7_WRITE_AGENT_RULES=true`.
+- **Never the home directory as a project**, no guessing via `~/.cursor/projects` (opt-in `M7_CURSOR_PROJECTS_SCAN=true`),
+  `project_path` / `output_path` confined (optional `M7_ALLOWED_ROOTS`).
+- **No `.env` loading**, no OpenAI/Anthropic SDKs, no ChromaDB packages, no startup model "discovery" pings.
+- **LLM via opencode**: intent classification through `jev` (OpenCode Zen System One, typed probabilities),
+  Hive roles through `opencode run` in a sandbox (private config, all tools denied, empty cwd).
+  Models per role: presets `free` / `cheap` / `strong`, env overrides, or per call from the dialog
+  (`mcp_m7_hive_coordinator` → `preset`, `models`; list with `mcp_m7_models`).
+- Visualizer bound to `127.0.0.1` with origin checks; mesh file exchange hardened; dynamic extension loader removed.
+- `install.sh` only builds; `scripts/register.mjs` adds one entry to Claude Code / Cursor / Codex / opencode
+  config with a backup and never replaces other servers.
+
+```bash
+./install.sh
+node scripts/register.mjs claude --dry-run   # then without --dry-run
+```
+
+---
+
 # M7 MCP
 
 **Current release:** [v3.22.2](https://github.com/DukeDeSouth/m7-mcp-oss/releases/tag/v3.22.2) — clone `main` or download the release archive. There is no npm package; build from source (`npm run build`).
@@ -45,7 +74,7 @@ Around that cycle there is a set of supporting tools:
 - Task graph, task transfer between chats, architecture advisor, knowledge
   graph, error database, style guardian, DCCE text validator, mesh for
   multi-machine sessions, and a few more. The full list is in
-  [docs/TOOLS_REGISTRY.md](docs/TOOLS_REGISTRY.md); 37 tools are registered
+  [docs/TOOLS_REGISTRY.md](docs/TOOLS_REGISTRY.md); 38 tools are registered
   by `src/index.ts`.
 
 Documentation is split by reader. For the agent: [M7-GUIDE.md](M7-GUIDE.md)
@@ -75,10 +104,7 @@ For context, since harness-engineering frameworks became a popular topic in
 ## Requirements
 
 - Node 22 or newer
-- `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`. The server checks both at startup
-  and refuses to run without them; this is a leftover of the Hive-first design
-  and is on the list of things to relax. Placeholder values are enough if you
-  do not use Hive.
+- *(fork)* No API keys. `opencode` CLI with `opencode auth login` for Hive and the classifier fallback.
 - Optional: ChromaDB at `CHROMA_URL` (default `http://localhost:8000`) for
   vector memory.
 
@@ -101,8 +127,6 @@ Then add the server to your MCP client. For Cursor, `~/.cursor/mcp.json`:
       "args": ["/absolute/path/to/m7-mcp/dist/index.js"],
       "cwd": "/absolute/path/to/m7-mcp",
       "env": {
-        "OPENAI_API_KEY": "sk-...",
-        "ANTHROPIC_API_KEY": "sk-ant-...",
         "M7_PROJECT_PATH": "/absolute/path/to/your/project"
       }
     }
@@ -110,7 +134,7 @@ Then add the server to your MCP client. For Cursor, `~/.cursor/mcp.json`:
 }
 ```
 
-`install.sh` does the same interactively. `M7_PROJECT_PATH` is optional: the
+*(fork)* Prefer `node scripts/register.mjs cursor` — it merges one entry and keeps a backup. `M7_PROJECT_PATH` is optional: the
 server tries MCP roots and a few environment hints first, but setting it
 explicitly avoids surprises when several workspaces are open.
 
