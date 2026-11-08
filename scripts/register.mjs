@@ -3,7 +3,7 @@
  * Register the M7 MCP server in one agent without touching anything else.
  *
  *   node scripts/register.mjs claude|cursor|codex|opencode|dsh [--dry-run] [--name m7] [--force]
- *   (dsh = DeepSeek Harness desktop profile, ~/.dsh/profiles/desktop/cordis.patch.yml)
+ *   (dsh = DeepSeek Harness with the dsh-mcp-manager plugin, $DSH_HOME/mcp-servers.json)
  *
  * - Adds exactly one server entry; other servers and settings are preserved.
  * - Writes a timestamped backup next to the config before changing it.
@@ -171,30 +171,20 @@ switch (target) {
     break;
   }
   case 'dsh': {
-    // DeepSeek Harness: plugin list in the desktop profile; MCP servers use @deepseek-ai/dsh-mcp-client
-    const file = join(homedir(), '.dsh', 'profiles', 'desktop', 'cordis.patch.yml');
-    if (!existsSync(file)) {
-      console.error(`❌ ${file} not found — open DeepSeek Harness once first`);
+    // DeepSeek Harness with the dsh-mcp-manager plugin: servers live in $DSH_HOME/mcp-servers.json
+    // (shared by all profiles and sessions, hot-reloaded by the plugin)
+    const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
+    const file = join(dshHome, 'mcp-servers.json');
+    const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf-8')) : { version: 1, servers: [] };
+    config.servers ??= [];
+    const idx = config.servers.findIndex(sv => sv.serverName === NAME);
+    if (idx >= 0 && !force) {
+      console.error(`❌ ${file} already has "${NAME}" — use --force or --name`);
       process.exit(1);
     }
-    const text = readFileSync(file, 'utf-8');
-    if (new RegExp(`^- id: mcp-${NAME}\\s*$`, 'm').test(text) || new RegExp(`serverName: ${NAME}\\s*$`, 'm').test(text)) {
-      console.error(`❌ ${file} already has an MCP server "${NAME}" — edit it by hand`);
-      process.exit(1);
-    }
-    const block = [
-      `# M7 MCP (secure fork): ${ROOT}`,
-      `- id: mcp-${NAME}`,
-      '  name: "@deepseek-ai/dsh-mcp-client"',
-      '  config:',
-      `    serverName: ${NAME}`,
-      '    transport: stdio',
-      `    command: ${JSON.stringify(NODE)}`,
-      `    args: [ ${JSON.stringify(ENTRY)} ]`,
-      '    toolCallTimeoutMs: 900000',
-      '',
-    ].join('\n');
-    backupAndWrite(file, text.replace(/\n*$/, '\n') + block);
+    const entry = { serverName: NAME, transport: 'stdio', command: NODE, args: [ENTRY], toolCallTimeoutMs: 900000, enabled: true };
+    if (idx >= 0) config.servers[idx] = entry; else config.servers.push(entry);
+    backupAndWrite(file, `${JSON.stringify(config, null, 2)}\n`);
     break;
   }
 }

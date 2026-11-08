@@ -43,6 +43,6 @@ Register in an agent (one entry is merged, other servers are kept, a backup is w
   node scripts/register.mjs cursor      # ~/.cursor/mcp.json
   node scripts/register.mjs codex       # ~/.codex/config.toml
   node scripts/register.mjs opencode    # ~/.config/opencode/opencode.jsonc
-  node scripts/register.mjs dsh         # DeepSeek Harness (~/.dsh/profiles/desktop/cordis.patch.yml)
+  node scripts/register.mjs dsh         # DeepSeek Harness + dsh-mcp-manager ($DSH_HOME/mcp-servers.json)
 Add --dry-run to see the change without writing.
 EOF
